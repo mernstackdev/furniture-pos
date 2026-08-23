@@ -1,26 +1,96 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
+  --background: #faf6f1;
+  --surface: #ffffff;
+  --surface-muted: #f3ece3;
+  --foreground: #2a201a;
+  --muted-foreground: #78706a;
+  --border: #e7e0d9;
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --brand: #7c4a2d;
+  --brand-foreground: #ffffff;
+  --accent: #d9822b;
+  --accent-foreground: #2a201a;
+
+  --success: #3f7d4f;
+  --success-bg: #e6f2e8;
+  --warning: #c4841d;
+  --warning-bg: #fbf0dc;
+  --danger: #b4433a;
+  --danger-bg: #fbe9e7;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    --background: #1c1613;
+    --surface: #241d19;
+    --surface-muted: #2c231e;
+    --foreground: #f2e9e1;
+    --muted-foreground: #b3a89e;
+    --border: #3a2f28;
+
+    --brand: #c98a5e;
+    --brand-foreground: #1c1613;
+    --accent: #e6973c;
+    --accent-foreground: #1c1613;
+
+    --success: #6fbf83;
+    --success-bg: #223a29;
+    --warning: #e0a94a;
+    --warning-bg: #3c2f18;
+    --danger: #e08277;
+    --danger-bg: #3c2320;
   }
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-surface: var(--surface);
+  --color-surface-muted: var(--surface-muted);
+  --color-foreground: var(--foreground);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-brand: var(--brand);
+  --color-brand-foreground: var(--brand-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-success: var(--success);
+  --color-success-bg: var(--success-bg);
+  --color-warning: var(--warning);
+  --color-warning-bg: var(--warning-bg);
+  --color-danger: var(--danger);
+  --color-danger-bg: var(--danger-bg);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+}
+
+.input {
+  width: 100%;
+  border-radius: 0.5rem;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  padding: 0.5rem 0.75rem;
+  font-size: 0.875rem;
+  color: var(--foreground);
+}
+
+.input:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+@media print {
+  .no-print {
+    display: none !important;
+  }
+  .print-area {
+    margin: 0 !important;
+    padding: 0 !important;
+  }
 }
