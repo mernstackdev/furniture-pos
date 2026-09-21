@@ -1,0 +1,29 @@
+# Taste
+- Prefers Supabase as the backend for database, auth, and storage layers. Confidence: 0.6
+- Deploys the Next.js app on Vercel, managing environment variables through the Vercel dashboard for the hosted deployment. Confidence: 0.55
+- Always use the installed Supabase skills (`supabase`, `supabase-postgres-best-practices`) for anything Supabase-related, rather than working from memory. Confidence: 0.8
+- Use Supabase Storage for inventory product images and the shop logo. Confidence: 0.75
+- Single shop only — no multi-tenancy, so tables carry no `shop_id`/tenant column. Confidence: 0.85
+- Simple `admin` | `cashier` role model where permissions differ by role; only admins manage user accounts. Confidence: 0.65
+- Accounts are created by an admin rather than by public self-registration, and require no email verification. Confidence: 0.8
+- Hard delete for records rather than soft delete. Confidence: 0.7
+- Deliver features in small sequential passes; explicitly does not want everything implemented in one go ("don't implement everything in one go"). Confidence: 0.8
+- UI must give clear feedback on user actions — success and error toasts rather than silent submissions. Confidence: 0.7
+- Wants placeholder text on form input fields. Confidence: 0.7
+- Clickable elements (buttons, links, icon controls, checkboxes) should carry `cursor-pointer` — interactive affordances must look clickable. Confidence: 0.65
+- Prefers searchable dropdowns for reference data (categories, vendors, products) rather than plain `<select>`s, and where adding a new value is meaningful wants a shortcut to do it from the picker (e.g. a small "+ Add new vendor" button next to the vendor field), while search-only is fine for pickers that don't need creation. Confidence: 0.7
+- Favors granular, permission-key based authorization (role → permission mapping enforced in the database) over hardcoded role checks, so rights can be granted "if they have permissions" without code changes. Confidence: 0.6
+- List/table screens should paginate server-side (not client-side) — explicitly asks for "server side" pagination. Confidence: 0.75
+- List screens should offer a filter bar: text search (e.g. by name/SKU) plus dropdown selects for categorical fields and range filters for numeric fields like price. Confidence: 0.75
+- Destructive actions (e.g. deleting a record) require an in-app confirmation modal, not a bare `window.confirm`. Confidence: 0.7
+- Wants mobile-friendly, responsive UIs: on small screens prefer card layouts over tables, tuck dense filter controls behind a toggle button, and scale headings/primary-action labels down (rather than let titles truncate or get cut off). Confidence: 0.75
+- Values space-efficient app chrome on desktop: wants the sidebar collapsible (icon-only rail with tooltips) so the main content area reclaims the space, with the surrounding layout/spacing adjusting automatically. Confidence: 0.6
+- Form validation should use `zod` + `react-hook-form` "everywhere" — wants these libraries (which he installs himself) adopted uniformly across all forms rather than ad-hoc per-form validation. Confidence: 0.85
+- Wants page-level primary actions ("Add product", "Add vendor", "+ New purchase order", "Add staff") placed in the top bar/navbar, not inside the page body, so the body keeps maximum space for filters and data. Confidence: 0.8
+- Prefers "vendor" as the term for the parties stock is bought from, treating it as synonymous with "supplier" and using a single term consistently across schema, code and UI. Confidence: 0.65
+- Longer/multi-field forms (e.g. a purchase order with line items) should live on their own dedicated page rather than inside a modal. Confidence: 0.6
+- Form inputs need visible labels (e.g. "Quantity", "Unit cost (PKR)") — placeholder text or headings alone aren't enough. Confidence: 0.6
+- Wants UI patterns applied consistently across the whole app: when he asks for a layout on "all tables" he expects one shared, reusable implementation used on every list screen, not a copy-paste applied to the screen in view. Confidence: 0.65
+- Dedicated sub-pages (e.g. a full-page form reachable from a list) should carry a clear control back to the parent list — a "← Back" button in the top bar. Confidence: 0.6
+- Cares about the visual polish of screens and will call out a page that looks unprofessional ("not looking good"), expecting a proper redesign rather than a functional-but-plain layout. Confidence: 0.6
+- Wants per-record detail/history views, not just lists: e.g. a customer detail page showing purchase history, totals and the last payment method used, with rows linking through to the underlying records. Confidence: 0.6

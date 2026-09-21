@@ -1,43 +1,84 @@
 "use client";
 
-import { useState } from "react";
-import type { Customer } from "@/lib/types";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { startTransition, useActionState } from "react";
+import { useForm } from "react-hook-form";
 import { Button } from "./ui/Button";
+import { Field } from "./ui/Field";
+import { useActionToast } from "./ui/Toast";
+import type { CustomerState } from "@/app/(pos)/customers/actions";
+import { customerSchema, type CustomerValues } from "@/lib/validation";
+import type { Customer } from "@/lib/sales";
+
+const initialState: CustomerState = { error: null, message: null };
 
 interface CustomerFormProps {
   initial?: Customer;
-  onSubmit: (values: Omit<Customer, "id" | "createdAt">) => void;
+  action: (state: CustomerState, formData: FormData) => Promise<CustomerState>;
+  onDone: () => void;
   onCancel: () => void;
 }
 
-export function CustomerForm({ initial, onSubmit, onCancel }: CustomerFormProps) {
-  const [name, setName] = useState(initial?.name ?? "");
-  const [phone, setPhone] = useState(initial?.phone ?? "");
-  const [address, setAddress] = useState(initial?.address ?? "");
+export function CustomerForm({ initial, action, onDone, onCancel }: CustomerFormProps) {
+  const {
+    register,
+    handleSubmit,
+    formState: { errors },
+  } = useForm<CustomerValues>({
+    resolver: zodResolver(customerSchema),
+    defaultValues: {
+      name: initial?.name ?? "",
+      phone: initial?.phone ?? "",
+      address: initial?.address ?? "",
+    },
+  });
+
+  const [state, formAction, pending] = useActionState(
+    async (previous: CustomerState, formData: FormData) => {
+      const result = await action(previous, formData);
+      if (result.message) onDone();
+      return result;
+    },
+    initialState
+  );
+
+  useActionToast(state);
+
+  const onSubmit = handleSubmit((values) => {
+    const formData = new FormData();
+    if (initial) formData.set("id", initial.id);
+    formData.set("name", values.name);
+    formData.set("phone", values.phone);
+    formData.set("address", values.address);
+    startTransition(() => formAction(formData));
+  });
 
   return (
-    <form
-      onSubmit={(e) => {
-        e.preventDefault();
-        onSubmit({ name, phone, address });
-      }}
-      className="space-y-4"
-    >
-      <label className="block text-sm">
-        <span className="mb-1 block font-medium text-foreground">Full name</span>
-        <input required value={name} onChange={(e) => setName(e.target.value)} className="input" />
-      </label>
-      <label className="block text-sm">
-        <span className="mb-1 block font-medium text-foreground">Phone number</span>
-        <input required value={phone} onChange={(e) => setPhone(e.target.value)} className="input" placeholder="03XX-XXXXXXX" />
-      </label>
-      <label className="block text-sm">
-        <span className="mb-1 block font-medium text-foreground">Address</span>
-        <textarea required value={address} onChange={(e) => setAddress(e.target.value)} className="input" rows={3} />
-      </label>
+    <form onSubmit={onSubmit} className="space-y-4" noValidate>
+      <Field label="Full name" error={errors.name?.message}>
+        <input {...register("name")} placeholder="e.g. Ahmed Raza" className="input" />
+      </Field>
+
+      <Field label="Phone number" error={errors.phone?.message}>
+        <input {...register("phone")} placeholder="0300-1234567" inputMode="tel" className="input" />
+      </Field>
+
+      <Field label="Address" error={errors.address?.message}>
+        <textarea
+          {...register("address")}
+          placeholder="House / street, area, city"
+          className="input"
+          rows={3}
+        />
+      </Field>
+
       <div className="flex justify-end gap-2 pt-2">
-        <Button type="button" variant="secondary" onClick={onCancel}>Cancel</Button>
-        <Button type="submit">{initial ? "Save changes" : "Add customer"}</Button>
+        <Button type="button" variant="secondary" onClick={onCancel}>
+          Cancel
+        </Button>
+        <Button type="submit" disabled={pending}>
+          {pending ? "Saving…" : initial ? "Save changes" : "Add customer"}
+        </Button>
       </div>
     </form>
   );

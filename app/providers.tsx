@@ -1,7 +1,12 @@
 "use client";
 
-import { AppDataProvider } from "@/lib/store";
+import { ShopSettingsProvider } from "@/lib/settings";
+import { ToastProvider } from "@/components/ui/Toast";
 
 export function Providers({ children }: { children: React.ReactNode }) {
-  return <AppDataProvider>{children}</AppDataProvider>;
+  return (
+    <ShopSettingsProvider>
+      <ToastProvider>{children}</ToastProvider>
+    </ShopSettingsProvider>
+  );
 }

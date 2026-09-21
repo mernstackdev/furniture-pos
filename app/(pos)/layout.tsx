@@ -1,15 +1,18 @@
-"use client";
+import { PosShell } from "@/components/PosShell";
+import { requireUser } from "@/lib/auth";
 
-import { Sidebar } from "@/components/Sidebar";
-import { SidebarProvider } from "@/components/SidebarContext";
+// Server Component: the session is verified here, not only in proxy.ts, so a
+// route in this group can never render without a signed-in user.
+//
+// `children` is typed explicitly rather than with LayoutProps<"/">: this route
+// group resolves to the same "/" URL key as the root layout, so the generated
+// helper for that key belongs to the root layout.
+export default async function PosLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  const user = await requireUser();
 
-export default function PosLayout({ children }: { children: React.ReactNode }) {
-  return (
-    <SidebarProvider>
-      <div className="flex min-h-screen">
-        <Sidebar />
-        <main className="min-w-0 flex-1 bg-background">{children}</main>
-      </div>
-    </SidebarProvider>
-  );
+  return <PosShell user={user}>{children}</PosShell>;
 }

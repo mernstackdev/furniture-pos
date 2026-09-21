@@ -29,7 +29,7 @@ export function Modal({ open, onClose, title, children }: ModalProps) {
           <h2 className="text-lg font-semibold text-foreground">{title}</h2>
           <button
             onClick={onClose}
-            className="rounded-md p-1 text-muted-foreground hover:bg-surface-muted"
+            className="cursor-pointer rounded-md p-1 text-muted-foreground hover:bg-surface-muted"
             aria-label="Close"
           >
             ✕
