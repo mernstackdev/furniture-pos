@@ -1,16 +1,12 @@
 "use client";
 
 import { zodResolver } from "@hookform/resolvers/zod";
-import { startTransition, useActionState } from "react";
 import { useForm } from "react-hook-form";
 import { Button } from "@/components/ui/Button";
 import { Field } from "@/components/ui/Field";
-import { useActionToast } from "@/components/ui/Toast";
-import {
-  updateFullName,
-  updatePassword,
-  type ProfileState,
-} from "@/app/(pos)/profile/actions";
+import { updateFullName, updatePassword, type ProfileState } from "@/app/(pos)/profile/actions";
+import { useServerAction, withoutPrevious } from "@/lib/queries/mutation";
+import { STAFF_QUERY_KEY } from "@/lib/queries/staff";
 import {
   passwordChangeSchema,
   profileNameSchema,
@@ -39,26 +35,31 @@ export function ProfileForm({
     defaultValues: { password: "", confirm: "" },
   });
 
-  const [nameState, nameAction, namePending] = useActionState(updateFullName, initialState);
-  const [passwordState, passwordAction, passwordPending] = useActionState(
-    updatePassword,
-    initialState
-  );
+  const nameMutation = useServerAction({
+    action: withoutPrevious(updateFullName, initialState),
+    // The staff list reads profiles.full_name, so renaming yourself changes a
+    // key that page would otherwise keep serving stale.
+    invalidate: [STAFF_QUERY_KEY],
+  });
 
-  useActionToast(nameState);
-  useActionToast(passwordState);
+  // Runs through the Server Action rather than calling updateUser from the
+  // browser, so the password is validated by the same schema on the server and
+  // the auth call stays consistent with sign-in and setup.
+  const passwordMutation = useServerAction({
+    action: withoutPrevious(updatePassword, initialState),
+  });
 
   const submitName = nameForm.handleSubmit((values) => {
     const formData = new FormData();
     formData.set("fullName", values.fullName);
-    startTransition(() => nameAction(formData));
+    nameMutation.mutate(formData);
   });
 
   const submitPassword = passwordForm.handleSubmit((values) => {
     const formData = new FormData();
     formData.set("password", values.password);
     formData.set("confirm", values.confirm);
-    startTransition(() => passwordAction(formData));
+    passwordMutation.mutate(formData);
   });
 
   return (
@@ -85,8 +86,8 @@ export function ProfileForm({
             />
           </Field>
           <div className="flex justify-end">
-            <Button type="submit" disabled={namePending}>
-              {namePending ? "Saving…" : "Save name"}
+            <Button type="submit" disabled={nameMutation.isPending}>
+              {nameMutation.isPending ? "Saving…" : "Save name"}
             </Button>
           </div>
         </form>
@@ -114,8 +115,8 @@ export function ProfileForm({
             />
           </Field>
           <div className="flex justify-end">
-            <Button type="submit" disabled={passwordPending}>
-              {passwordPending ? "Updating…" : "Update password"}
+            <Button type="submit" disabled={passwordMutation.isPending}>
+              {passwordMutation.isPending ? "Updating…" : "Update password"}
             </Button>
           </div>
         </form>

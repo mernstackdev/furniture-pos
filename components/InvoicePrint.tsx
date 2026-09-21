@@ -1,29 +1,42 @@
 "use client";
 
 import Link from "next/link";
+import { useQuery } from "@tanstack/react-query";
 import { TopBar } from "@/components/TopBar";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { formatDateTime, formatPKR } from "@/lib/format";
+import { useSupabaseBrowser } from "@/lib/queries/client";
+import {
+  invoiceCustomerQuery,
+  invoiceItemsQuery,
+  invoiceQuery,
+} from "@/lib/queries/invoices";
 import { useShopSettings } from "@/lib/settings";
-import { paymentMethodLabel, saleStatusTone, type SaleItemRow, type SaleRow } from "@/lib/sales";
+import { paymentMethodLabel, saleStatusTone } from "@/lib/sales";
 
 /**
  * The printable invoice. Shop name and tagline still come from the local
  * settings context, which is why this is a client component.
  */
-export function InvoicePrint({
-  sale,
-  items,
-  customerPhone,
-  customerAddress,
-}: {
-  sale: SaleRow;
-  items: SaleItemRow[];
-  customerPhone: string | null;
-  customerAddress: string | null;
-}) {
+export function InvoicePrint({ id }: { id: string }) {
   const { settings } = useShopSettings();
+  const supabase = useSupabaseBrowser();
+
+  // The page prefetched all three keys, so this renders from the cache.
+  const { data: sale } = useQuery(invoiceQuery(supabase, { id }));
+  const { data: items = [] } = useQuery(invoiceItemsQuery(supabase, { id }));
+
+  const customerId = sale?.customerId ?? null;
+  const { data: customer } = useQuery({
+    ...invoiceCustomerQuery(supabase, { customerId: customerId ?? "" }),
+    // A walk-in sale has no customer row to look up.
+    enabled: customerId !== null,
+  });
+  const customerPhone = customer?.phone ?? null;
+  const customerAddress = customer?.address ?? null;
+
+  if (!sale) return null;
 
   return (
     <div>

@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useActionState, useState } from "react";
+import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -14,7 +15,6 @@ import {
   PaginationFooter,
   ResponsiveList,
 } from "@/components/ui/ResponsiveList";
-import { useActionToast } from "@/components/ui/Toast";
 import { CustomerForm } from "@/components/CustomerForm";
 import { CustomerFilters, type CustomerFilterValues } from "@/components/CustomerFilters";
 import {
@@ -23,52 +23,60 @@ import {
   type CustomerState,
 } from "@/app/(pos)/customers/actions";
 import { formatDate, formatPKR } from "@/lib/format";
+import { useSupabaseBrowser } from "@/lib/queries/client";
+import {
+  CUSTOMERS_PAGE_SIZE,
+  CUSTOMERS_QUERY_KEY,
+  customersQuery,
+} from "@/lib/queries/customers";
+import { INVOICES_QUERY_KEY } from "@/lib/queries/invoices";
+import { useServerAction, withoutPrevious } from "@/lib/queries/mutation";
 import { paymentMethodLabel, type CustomerSummary } from "@/lib/sales";
 
 const initialState: CustomerState = { error: null, message: null };
 
 export function CustomersManager({
-  customers,
   canManage,
   filters,
   page,
-  total,
   prevHref,
   nextHref,
 }: {
-  customers: CustomerSummary[];
   canManage: boolean;
   filters: CustomerFilterValues;
   page: number;
-  total: number;
   prevHref: string | null;
   nextHref: string | null;
 }) {
+  const supabase = useSupabaseBrowser();
   const [editing, setEditing] = useState<CustomerSummary | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<CustomerSummary | null>(null);
   const [filtersOpen, setFiltersOpen] = useState(false);
 
-  const [deleteState, deleteAction, deletePending] = useActionState(
-    async (previous: CustomerState, formData: FormData) => {
-      const result = await deleteCustomer(previous, formData);
-      if (result.message) setDeleteTarget(null);
-      return result;
-    },
-    initialState
-  );
+  // The server render dehydrated this exact query key, so the first paint reads
+  // from the cache rather than triggering a browser fetch.
+  const { data, isPending } = useQuery(customersQuery(supabase, { filters, page }));
+  const customers = data?.customers ?? [];
+  const total = data?.total ?? 0;
 
-  useActionToast(deleteState);
+  const deleteMutation = useServerAction({
+    action: withoutPrevious(deleteCustomer, initialState),
+    // Deleting a customer leaves their sales as walk-ins, which changes the
+    // invoices list too.
+    invalidate: [CUSTOMERS_QUERY_KEY, INVOICES_QUERY_KEY],
+    onSuccess: () => setDeleteTarget(null),
+  });
 
-  const firstRow = total === 0 ? 0 : (page - 1) * 10 + 1;
-  const lastRow = Math.min(page * 10, total);
-  const totalPages = Math.max(1, Math.ceil(total / 10));
+  const firstRow = total === 0 ? 0 : (page - 1) * CUSTOMERS_PAGE_SIZE + 1;
+  const lastRow = Math.min(page * CUSTOMERS_PAGE_SIZE, total);
+  const totalPages = Math.max(1, Math.ceil(total / CUSTOMERS_PAGE_SIZE));
 
   function confirmDelete() {
     if (!deleteTarget) return;
     const formData = new FormData();
     formData.set("id", deleteTarget.id);
     formData.set("label", deleteTarget.name);
-    deleteAction(formData);
+    deleteMutation.mutate(formData);
   }
 
   const lastPayment = (customer: CustomerSummary) =>
@@ -124,9 +132,11 @@ export function CustomersManager({
         rows={customers}
         rowKey={(customer) => customer.id}
         emptyMessage={
-          filters.q
-            ? "No customers match this search."
-            : "No customers yet. Add one, or sell to a walk-in."
+          isPending
+            ? "Loading customers…"
+            : filters.q
+              ? "No customers match this search."
+              : "No customers yet. Add one, or sell to a walk-in."
         }
         card={(customer) => (
           <>
@@ -205,7 +215,7 @@ export function CustomersManager({
           <ConfirmDialog
             open={deleteTarget !== null}
             title="Delete customer"
-            pending={deletePending}
+            pending={deleteMutation.isPending}
             message={
               <>
                 Delete <span className="font-medium text-foreground">{deleteTarget?.name}</span>?

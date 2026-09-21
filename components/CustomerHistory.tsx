@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useQuery } from "@tanstack/react-query";
 import { Badge } from "@/components/ui/Badge";
 import {
   CardField,
@@ -9,18 +10,27 @@ import {
   ResponsiveList,
 } from "@/components/ui/ResponsiveList";
 import { formatDateTime, formatPKR } from "@/lib/format";
-import { paymentMethodLabel, saleStatusTone, type SaleRow } from "@/lib/sales";
+import { useSupabaseBrowser } from "@/lib/queries/client";
+import { customerSalesQuery } from "@/lib/queries/customers";
+import { paymentMethodLabel, saleStatusTone } from "@/lib/sales";
 
 /**
  * Client component because ResponsiveList takes `card` and `columns` as
  * render functions, which cannot cross the server/client boundary.
  */
-export function CustomerHistory({ sales }: { sales: SaleRow[] }) {
+export function CustomerHistory({ customerId }: { customerId: string }) {
+  const supabase = useSupabaseBrowser();
+  // The page prefetched this exact key, so the first paint reads the cache.
+  const { data, isPending } = useQuery(
+    customerSalesQuery(supabase, { customerId })
+  );
+  const sales = data ?? [];
+
   return (
     <ResponsiveList
       rows={sales}
       rowKey={(sale) => sale.id}
-      emptyMessage="No purchases yet."
+      emptyMessage={isPending ? "Loading purchases…" : "No purchases yet."}
       card={(sale) => (
         <>
           <CardHeading

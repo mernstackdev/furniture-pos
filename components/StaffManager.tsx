@@ -1,8 +1,9 @@
 "use client";
 
 import { zodResolver } from "@hookform/resolvers/zod";
-import { startTransition, useActionState, useState } from "react";
+import { useState } from "react";
 import { useForm } from "react-hook-form";
+import { useQuery } from "@tanstack/react-query";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -15,55 +16,52 @@ import {
   CardHeading,
   ResponsiveList,
 } from "@/components/ui/ResponsiveList";
-import { useActionToast } from "@/components/ui/Toast";
 import { staffAction, type StaffState } from "@/app/(pos)/users/actions";
+import { useSupabaseBrowser } from "@/lib/queries/client";
+import { useServerAction, withoutPrevious } from "@/lib/queries/mutation";
+import { staffListQuery, STAFF_QUERY_KEY, type StaffMember } from "@/lib/queries/staff";
 import { formatDate } from "@/lib/format";
 import { passwordResetSchema, type PasswordResetValues } from "@/lib/validation";
 
-export interface StaffMember {
-  id: string;
-  email: string;
-  fullName: string;
-  role: "admin" | "cashier";
-  createdAt: string;
-}
-
 const initialState: StaffState = { error: null, message: null };
 
-export function StaffManager({
-  staff,
-  currentUserId,
-}: {
-  staff: StaffMember[];
-  currentUserId: string;
-}) {
+export function StaffManager({ currentUserId }: { currentUserId: string }) {
+  const supabase = useSupabaseBrowser();
   const [resetTarget, setResetTarget] = useState<StaffMember | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<StaffMember | null>(null);
+
+  // Prefetched and hydrated by the page, so the first render reads the cache.
+  const { data, isPending } = useQuery(staffListQuery(supabase));
+  const staff = data ?? [];
 
   const resetForm = useForm<PasswordResetValues>({
     resolver: zodResolver(passwordResetSchema),
     defaultValues: { password: "" },
   });
 
-  // The dialogs are dismissed from inside the action wrapper rather than from an
-  // effect: syncing state in an effect cascades renders.
-  const [actionState, actionDispatch, actionPending] = useActionState(
-    async (previous: StaffState, formData: FormData) => {
-      const result = await staffAction(previous, formData);
-      if (result.message) {
-        const intent = formData.get("intent");
-        if (intent === "resetPassword") {
-          setResetTarget(null);
-          resetForm.reset();
-        }
-        if (intent === "delete") setDeleteTarget(null);
-      }
-      return result;
-    },
-    initialState
-  );
+  // One action carries an `intent` and serves all three writes. Each intent
+  // gets its own mutation so it can own the right success side effect (close
+  // which dialog, reset which form) — the shared action still does the write,
+  // and each one refreshes the staff key so the list reflects it.
+  const roleMutation = useServerAction({
+    action: withoutPrevious(staffAction, initialState),
+    invalidate: [STAFF_QUERY_KEY],
+  });
 
-  useActionToast(actionState);
+  const resetMutation = useServerAction({
+    action: withoutPrevious(staffAction, initialState),
+    invalidate: [STAFF_QUERY_KEY],
+    onSuccess: () => {
+      setResetTarget(null);
+      resetForm.reset();
+    },
+  });
+
+  const deleteMutation = useServerAction({
+    action: withoutPrevious(staffAction, initialState),
+    invalidate: [STAFF_QUERY_KEY],
+    onSuccess: () => setDeleteTarget(null),
+  });
 
   const submitReset = resetForm.handleSubmit((values) => {
     if (!resetTarget) return;
@@ -71,7 +69,7 @@ export function StaffManager({
     formData.set("intent", "resetPassword");
     formData.set("userId", resetTarget.id);
     formData.set("password", values.password);
-    startTransition(() => actionDispatch(formData));
+    resetMutation.mutate(formData);
   });
 
   function confirmDelete() {
@@ -79,7 +77,7 @@ export function StaffManager({
     const formData = new FormData();
     formData.set("intent", "delete");
     formData.set("userId", deleteTarget.id);
-    actionDispatch(formData);
+    deleteMutation.mutate(formData);
   }
 
   const roleLabel = (member: StaffMember) =>
@@ -115,7 +113,7 @@ export function StaffManager({
       <ResponsiveList
         rows={staff}
         rowKey={(member) => member.id}
-        emptyMessage="No staff accounts yet."
+        emptyMessage={isPending ? "Loading staff accounts…" : "No staff accounts yet."}
         card={(member) => (
           <>
             <CardHeading
@@ -151,7 +149,7 @@ export function StaffManager({
           {
             header: "Role",
             render: (member) => (
-              <form action={actionDispatch}>
+              <form action={roleMutation.mutate}>
                 <input type="hidden" name="intent" value="setRole" />
                 <input type="hidden" name="userId" value={member.id} />
                 <select
@@ -235,7 +233,7 @@ export function StaffManager({
       <ConfirmDialog
         open={deleteTarget !== null}
         title="Delete staff account"
-        pending={actionPending}
+        pending={deleteMutation.isPending}
         message={
           <>
             Delete{" "}

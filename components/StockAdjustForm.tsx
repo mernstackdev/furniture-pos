@@ -1,12 +1,13 @@
 "use client";
 
 import { zodResolver } from "@hookform/resolvers/zod";
-import { startTransition, useActionState } from "react";
 import { useForm, useWatch } from "react-hook-form";
 import { Button } from "./ui/Button";
 import { Field } from "./ui/Field";
-import { useActionToast } from "./ui/Toast";
 import { adjustStock, type StockState } from "@/app/(pos)/stock/actions";
+import { INVENTORY_QUERY_KEY } from "@/lib/queries/inventory";
+import { useServerAction, withoutPrevious } from "@/lib/queries/mutation";
+import { STOCK_QUERY_KEY } from "@/lib/queries/stock";
 import { stockAdjustSchema, type StockAdjustValues } from "@/lib/validation";
 import type { InventoryProduct } from "@/lib/inventory";
 
@@ -44,16 +45,13 @@ export function StockAdjustForm({
 
   const type = useWatch({ control, name: "type" });
 
-  const [state, formAction, pending] = useActionState(
-    async (previous: StockState, formData: FormData) => {
-      const result = await adjustStock(previous, formData);
-      if (result.message) onDone();
-      return result;
-    },
-    initialState
-  );
-
-  useActionToast(state);
+  const mutation = useServerAction({
+    action: withoutPrevious(adjustStock, initialState),
+    // An adjustment rewrites the product's quantity and its stock_status, so
+    // both this screen and the inventory list have to refresh.
+    invalidate: [STOCK_QUERY_KEY, INVENTORY_QUERY_KEY],
+    onSuccess: onDone,
+  });
 
   const onSubmit = handleSubmit((values) => {
     const formData = new FormData();
@@ -61,7 +59,7 @@ export function StockAdjustForm({
     formData.set("type", values.type);
     formData.set("qty", String(values.qty));
     formData.set("reason", values.reason ?? "");
-    startTransition(() => formAction(formData));
+    mutation.mutate(formData);
   });
 
   return (
@@ -106,8 +104,8 @@ export function StockAdjustForm({
         <Button type="button" variant="secondary" onClick={onCancel}>
           Cancel
         </Button>
-        <Button type="submit" disabled={pending}>
-          {pending ? "Saving…" : "Save movement"}
+        <Button type="submit" disabled={mutation.isPending}>
+          {mutation.isPending ? "Saving…" : "Save movement"}
         </Button>
       </div>
     </form>

@@ -1,6 +1,7 @@
 "use client";
 
-import { useActionState, useState } from "react";
+import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -12,7 +13,6 @@ import {
   PaginationFooter,
   ResponsiveList,
 } from "@/components/ui/ResponsiveList";
-import { useActionToast } from "@/components/ui/Toast";
 import { PurchaseFilters, type PurchaseFilterValues, type VendorOption } from "@/components/PurchaseFilters";
 import {
   cancelPurchaseOrder,
@@ -21,52 +21,65 @@ import {
 } from "@/app/(pos)/purchases/actions";
 import { formatDate, formatPKR } from "@/lib/format";
 import { purchaseStatusTone, type PurchaseOrderRow } from "@/lib/inventory";
+import { useSupabaseBrowser } from "@/lib/queries/client";
+import { withoutPrevious, useServerAction } from "@/lib/queries/mutation";
+import { PURCHASES_QUERY_KEY, purchaseOrdersQuery } from "@/lib/queries/purchases";
+import { INVENTORY_QUERY_KEY } from "@/lib/queries/inventory";
+import { STOCK_QUERY_KEY } from "@/lib/queries/stock";
+import { VENDORS_QUERY_KEY, vendorOptionsQuery } from "@/lib/queries/vendors";
 
 const initialState: PurchaseState = { error: null, message: null };
 
 export function PurchasesManager({
-  orders,
-  vendors,
   canManage,
   filters,
   page,
   pageSize,
-  total,
   prevHref,
   nextHref,
 }: {
-  orders: PurchaseOrderRow[];
-  vendors: VendorOption[];
   canManage: boolean;
   filters: PurchaseFilterValues;
   page: number;
   pageSize: number;
-  total: number;
   prevHref: string | null;
   nextHref: string | null;
 }) {
+  const supabase = useSupabaseBrowser();
   const [receiving, setReceiving] = useState<PurchaseOrderRow | null>(null);
   const [cancelling, setCancelling] = useState<PurchaseOrderRow | null>(null);
   const [filtersOpen, setFiltersOpen] = useState(false);
 
-  const [actionState, actionDispatch, actionPending] = useActionState(
-    async (previous: PurchaseState, formData: FormData) => {
-      const intent = formData.get("intent");
-      const result =
-        intent === "receive"
-          ? await receivePurchaseOrder(previous, formData)
-          : await cancelPurchaseOrder(previous, formData);
+  // The server render dehydrated these exact query keys, so the first paint
+  // reads from the cache rather than triggering a browser fetch.
+  const { data, isPending } = useQuery(purchaseOrdersQuery(supabase, { filters, page }));
+  const orders = data?.orders ?? [];
+  const total = data?.total ?? 0;
+  const { data: vendorData } = useQuery(vendorOptionsQuery(supabase));
+  const vendors: VendorOption[] = (vendorData ?? []).map((vendor) => ({
+    id: vendor.id,
+    name: vendor.name,
+  }));
 
-      if (result.message) {
-        if (intent === "receive") setReceiving(null);
-        else setCancelling(null);
-      }
-      return result;
-    },
-    initialState
-  );
+  // Receiving puts stock on the shelf and writes movements and product cost, so
+  // it touches the stock and inventory screens too; the rest are the order list
+  // and vendor balances.
+  const receiveMutation = useServerAction({
+    action: withoutPrevious(receivePurchaseOrder, initialState),
+    invalidate: [
+      PURCHASES_QUERY_KEY,
+      VENDORS_QUERY_KEY,
+      INVENTORY_QUERY_KEY,
+      STOCK_QUERY_KEY,
+    ],
+    onSuccess: () => setReceiving(null),
+  });
 
-  useActionToast(actionState);
+  const cancelMutation = useServerAction({
+    action: withoutPrevious(cancelPurchaseOrder, initialState),
+    invalidate: [PURCHASES_QUERY_KEY],
+    onSuccess: () => setCancelling(null),
+  });
 
   const firstRow = total === 0 ? 0 : (page - 1) * pageSize + 1;
   const lastRow = Math.min(page * pageSize, total);
@@ -78,25 +91,24 @@ export function PurchasesManager({
     filters.vendor !== "all",
   ].filter(Boolean).length;
 
-  const emptyMessage =
-    activeFilterCount > 0
+  const emptyMessage = isPending
+    ? "Loading purchase orders…"
+    : activeFilterCount > 0
       ? "No purchase orders match these filters."
       : "No purchase orders yet. Raising one is how stock normally comes in.";
 
   function confirmReceive() {
     if (!receiving) return;
     const formData = new FormData();
-    formData.set("intent", "receive");
     formData.set("id", receiving.id);
-    actionDispatch(formData);
+    receiveMutation.mutate(formData);
   }
 
   function confirmCancel() {
     if (!cancelling) return;
     const formData = new FormData();
-    formData.set("intent", "cancel");
     formData.set("id", cancelling.id);
-    actionDispatch(formData);
+    cancelMutation.mutate(formData);
   }
 
   function actions(order: PurchaseOrderRow) {
@@ -237,7 +249,7 @@ export function PurchasesManager({
             title="Receive purchase order"
             confirmLabel="Receive stock"
             pendingLabel="Receiving…"
-            pending={actionPending}
+            pending={receiveMutation.isPending}
             message={
               <>
                 Receive{" "}
@@ -258,7 +270,7 @@ export function PurchasesManager({
             title="Cancel purchase order"
             confirmLabel="Cancel order"
             pendingLabel="Cancelling…"
-            pending={actionPending}
+            pending={cancelMutation.isPending}
             message={
               <>
                 Cancel the order from{" "}

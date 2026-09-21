@@ -1,12 +1,10 @@
 "use client";
 
 import { useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/Button";
 import { Modal } from "@/components/ui/Modal";
 import { ProductForm } from "@/components/ProductForm";
 import { createProduct } from "@/app/(pos)/inventory/actions";
-import { INVENTORY_QUERY_KEY } from "@/lib/queries/inventory";
 import type { Category } from "@/lib/inventory";
 
 /**
@@ -15,7 +13,6 @@ import type { Category } from "@/lib/inventory";
  */
 export function AddProductButton({ categories }: { categories: Category[] }) {
   const [open, setOpen] = useState(false);
-  const queryClient = useQueryClient();
 
   return (
     <>
@@ -27,12 +24,7 @@ export function AddProductButton({ categories }: { categories: Category[] }) {
         <ProductForm
           categories={categories}
           action={createProduct}
-          onDone={() => {
-            // The new product also changes the paged list, which is cached in
-            // the browser; revalidatePath alone would leave it stale.
-            queryClient.invalidateQueries({ queryKey: INVENTORY_QUERY_KEY });
-            setOpen(false);
-          }}
+          onDone={() => setOpen(false)}
           onCancel={() => setOpen(false)}
         />
       </Modal>

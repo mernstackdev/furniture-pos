@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useQuery } from "@tanstack/react-query";
 import { TopBar } from "@/components/TopBar";
 import { StatCard } from "@/components/ui/StatCard";
 import { Badge } from "@/components/ui/Badge";
@@ -10,30 +11,38 @@ import {
   CardHeading,
   ResponsiveList,
 } from "@/components/ui/ResponsiveList";
+import { useSupabaseBrowser } from "@/lib/queries/client";
+import {
+  dashboardCustomerCountQuery,
+  dashboardProductsQuery,
+  dashboardRecentSalesQuery,
+  dashboardTodaySalesQuery,
+} from "@/lib/queries/dashboard";
 import { formatPKR, formatDate } from "@/lib/format";
-import { paymentMethodLabel, saleStatusTone, type SaleRow } from "@/lib/sales";
-import type { InventoryProduct } from "@/lib/inventory";
+import { paymentMethodLabel, saleStatusTone } from "@/lib/sales";
 
 /** Everything on this page now comes from Postgres. */
-export function DashboardClient({
-  totalProducts,
-  lowStockCount,
-  outOfStockCount,
-  customerCount,
-  alerts,
-  todaysRevenue,
-  todaysSaleCount,
-  recentSales,
-}: {
-  totalProducts: number;
-  lowStockCount: number;
-  outOfStockCount: number;
-  customerCount: number;
-  alerts: InventoryProduct[];
-  todaysRevenue: number;
-  todaysSaleCount: number;
-  recentSales: SaleRow[];
-}) {
+export function DashboardClient() {
+  const supabase = useSupabaseBrowser();
+
+  // The server prefetched each of these keys and the page hydrated the cache,
+  // so the first paint reads it rather than issuing a browser fetch.
+  const { data: products, isPending: productsPending } = useQuery(
+    dashboardProductsQuery(supabase)
+  );
+  const { data: customerCount } = useQuery(dashboardCustomerCountQuery(supabase));
+  const { data: todaysSales } = useQuery(dashboardTodaySalesQuery(supabase));
+  const { data: recentSales, isPending: salesPending } = useQuery(
+    dashboardRecentSalesQuery(supabase)
+  );
+
+  const allProducts = products ?? [];
+  const lowStock = allProducts.filter(
+    (product) => product.stockQty > 0 && product.stockQty <= product.lowStockThreshold
+  );
+  const outOfStock = allProducts.filter((product) => product.stockQty === 0);
+  const alerts = [...outOfStock, ...lowStock];
+
   return (
     <div>
       <TopBar title="Dashboard" description="Today's snapshot of your furniture shop" />
@@ -41,24 +50,24 @@ export function DashboardClient({
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <StatCard
             label="Today's Sales"
-            value={formatPKR(todaysRevenue)}
-            hint={`${todaysSaleCount} invoice(s) today`}
+            value={formatPKR(todaysSales?.revenue ?? 0)}
+            hint={`${todaysSales?.count ?? 0} invoice(s) today`}
           />
           <StatCard
             label="Total Products"
-            value={totalProducts.toString()}
-            hint={`${customerCount} customers on file`}
+            value={allProducts.length.toString()}
+            hint={`${customerCount ?? 0} customers on file`}
           />
           <StatCard
             label="Low Stock Items"
-            value={lowStockCount.toString()}
-            tone={lowStockCount > 0 ? "warning" : "default"}
+            value={lowStock.length.toString()}
+            tone={lowStock.length > 0 ? "warning" : "default"}
             hint="At or below threshold"
           />
           <StatCard
             label="Out of Stock"
-            value={outOfStockCount.toString()}
-            tone={outOfStockCount > 0 ? "danger" : "default"}
+            value={outOfStock.length.toString()}
+            tone={outOfStock.length > 0 ? "danger" : "default"}
             hint="Needs restocking"
           />
         </div>
@@ -69,7 +78,9 @@ export function DashboardClient({
             <ResponsiveList
               rows={alerts}
               rowKey={(product) => product.id}
-              emptyMessage="Everything is well stocked."
+              emptyMessage={
+                productsPending ? "Loading stock alerts…" : "Everything is well stocked."
+              }
               card={(product) => (
                 <>
                   <CardHeading
@@ -113,9 +124,11 @@ export function DashboardClient({
               </Link>
             </div>
             <ResponsiveList
-              rows={recentSales}
+              rows={recentSales ?? []}
               rowKey={(sale) => sale.id}
-              emptyMessage="No sales recorded yet."
+              emptyMessage={
+                salesPending ? "Loading recent invoices…" : "No sales recorded yet."
+              }
               card={(sale) => (
                 <>
                   <CardHeading

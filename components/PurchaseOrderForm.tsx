@@ -2,18 +2,21 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useRouter } from "next/navigation";
-import { startTransition, useActionState, useState } from "react";
+import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useFieldArray, useForm, useWatch } from "react-hook-form";
 import { Button } from "./ui/Button";
 import { Combobox, type ComboboxOption } from "./ui/Combobox";
 import { Field } from "./ui/Field";
 import { Modal } from "./ui/Modal";
-import { useActionToast } from "./ui/Toast";
 import { VendorForm } from "./VendorForm";
 import { createPurchaseOrder, type PurchaseState } from "@/app/(pos)/purchases/actions";
+import { useSupabaseBrowser } from "@/lib/queries/client";
 import { formatPKR } from "@/lib/format";
+import { withoutPrevious, useServerAction } from "@/lib/queries/mutation";
+import { PURCHASES_QUERY_KEY, purchaseProductsQuery } from "@/lib/queries/purchases";
+import { vendorOptionsQuery } from "@/lib/queries/vendors";
 import { purchaseOrderSchema, type PurchaseOrderValues } from "@/lib/validation";
-import type { InventoryProduct, Vendor } from "@/lib/inventory";
 
 const initialState: PurchaseState = { error: null, message: null };
 
@@ -21,15 +24,17 @@ const initialState: PurchaseState = { error: null, message: null };
  * Full-page form. Rendering it on a page rather than in a dialog gives the
  * line items room for real column headings.
  */
-export function PurchaseOrderForm({
-  vendors,
-  products,
-}: {
-  vendors: Vendor[];
-  products: InventoryProduct[];
-}) {
+export function PurchaseOrderForm() {
+  const supabase = useSupabaseBrowser();
   const router = useRouter();
   const [vendorModalOpen, setVendorModalOpen] = useState(false);
+
+  // The server render dehydrated both of these, so the first render already has
+  // the rows the form defaults need.
+  const { data: vendorData } = useQuery(vendorOptionsQuery(supabase));
+  const vendors = vendorData ?? [];
+  const { data: productData } = useQuery(purchaseProductsQuery(supabase));
+  const products = productData ?? [];
 
   // Shared by the form defaults and the watch defaults below.
   const initialItems = [
@@ -69,16 +74,12 @@ export function PurchaseOrderForm({
     0
   );
 
-  const [state, formAction, pending] = useActionState(
-    async (previous: PurchaseState, formData: FormData) => {
-      const result = await createPurchaseOrder(previous, formData);
-      if (result.message) router.push("/purchases");
-      return result;
-    },
-    initialState
-  );
-
-  useActionToast(state);
+  const mutation = useServerAction({
+    action: withoutPrevious(createPurchaseOrder, initialState),
+    // A new order lands at the top of the purchase list.
+    invalidate: [PURCHASES_QUERY_KEY],
+    onSuccess: () => router.push("/purchases"),
+  });
 
   const vendorOptions: ComboboxOption[] = vendors.map((vendor) => ({
     value: vendor.id,
@@ -99,7 +100,7 @@ export function PurchaseOrderForm({
     formData.set("notes", values.notes ?? "");
     // Sent as JSON; the action re-validates and maps the keys for the RPC.
     formData.set("items", JSON.stringify(values.items));
-    startTransition(() => formAction(formData));
+    mutation.mutate(formData);
   });
 
   const noProducts = products.length === 0;
@@ -266,8 +267,8 @@ export function PurchaseOrderForm({
           <Button type="button" variant="secondary" onClick={() => router.push("/purchases")}>
             Cancel
           </Button>
-          <Button type="submit" disabled={pending || noProducts}>
-            {pending ? "Creating…" : "Create purchase order"}
+          <Button type="submit" disabled={mutation.isPending || noProducts}>
+            {mutation.isPending ? "Creating…" : "Create purchase order"}
           </Button>
         </div>
       </form>
@@ -275,9 +276,9 @@ export function PurchaseOrderForm({
       <Modal open={vendorModalOpen} onClose={() => setVendorModalOpen(false)} title="Add vendor">
         <VendorForm
           onDone={() => {
+            // The vendor query is invalidated by the form's mutation, so the
+            // picker above refreshes on its own.
             setVendorModalOpen(false);
-            // Re-render so the new vendor arrives in the prop list.
-            router.refresh();
           }}
           onCancel={() => setVendorModalOpen(false)}
         />

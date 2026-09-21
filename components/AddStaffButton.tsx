@@ -1,13 +1,14 @@
 "use client";
 
 import { zodResolver } from "@hookform/resolvers/zod";
-import { startTransition, useActionState, useState } from "react";
+import { useState } from "react";
 import { useForm } from "react-hook-form";
 import { Button } from "@/components/ui/Button";
 import { Field } from "@/components/ui/Field";
 import { Modal } from "@/components/ui/Modal";
-import { useActionToast } from "@/components/ui/Toast";
 import { createUser, type StaffState } from "@/app/(pos)/users/actions";
+import { useServerAction, withoutPrevious } from "@/lib/queries/mutation";
+import { STAFF_QUERY_KEY } from "@/lib/queries/staff";
 import { staffCreateSchema, type StaffCreateValues } from "@/lib/validation";
 
 const initialState: StaffState = { error: null, message: null };
@@ -21,19 +22,16 @@ export function AddStaffButton() {
     defaultValues: { fullName: "", email: "", password: "", role: "cashier" },
   });
 
-  const [state, formAction, pending] = useActionState(
-    async (previous: StaffState, formData: FormData) => {
-      const result = await createUser(previous, formData);
-      if (result.message) {
-        setOpen(false);
-        form.reset();
-      }
-      return result;
+  const mutation = useServerAction({
+    action: withoutPrevious(createUser, initialState),
+    // The new account is a profile row the staff list now reads from the cache,
+    // so the invalidation replaces the old server revalidatePath.
+    invalidate: [STAFF_QUERY_KEY],
+    onSuccess: () => {
+      setOpen(false);
+      form.reset();
     },
-    initialState
-  );
-
-  useActionToast(state);
+  });
 
   const submit = form.handleSubmit((values) => {
     const formData = new FormData();
@@ -41,7 +39,7 @@ export function AddStaffButton() {
     formData.set("email", values.email);
     formData.set("password", values.password);
     formData.set("role", values.role);
-    startTransition(() => formAction(formData));
+    mutation.mutate(formData);
   });
 
   return (
@@ -87,8 +85,8 @@ export function AddStaffButton() {
             <Button variant="secondary" type="button" onClick={() => setOpen(false)}>
               Cancel
             </Button>
-            <Button type="submit" disabled={pending}>
-              {pending ? "Creating…" : "Create account"}
+            <Button type="submit" disabled={mutation.isPending}>
+              {mutation.isPending ? "Creating…" : "Create account"}
             </Button>
           </div>
         </form>

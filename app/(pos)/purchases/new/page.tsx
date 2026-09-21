@@ -1,10 +1,13 @@
 import Link from "next/link";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
+import { dehydrate, HydrationBoundary } from "@tanstack/react-query";
 import { TopBar } from "@/components/TopBar";
 import { PurchaseOrderForm } from "@/components/PurchaseOrderForm";
 import { hasPermission, requirePermission } from "@/lib/auth";
-import { mapProduct, PRODUCT_SELECT, type Vendor } from "@/lib/inventory";
+import { purchaseProductsQuery } from "@/lib/queries/purchases";
+import { vendorOptionsQuery } from "@/lib/queries/vendors";
+import { makeQueryClient } from "@/lib/queryClient";
 import { createClient } from "@/utils/supabase/server";
 
 export default async function NewPurchaseOrderPage() {
@@ -16,21 +19,13 @@ export default async function NewPurchaseOrderPage() {
   }
 
   const supabase = createClient(await cookies());
-  const [{ data: vendorRows }, { data: productRows }] = await Promise.all([
-    supabase.from("vendors").select("id, name, phone, city, address, notes").order("name"),
-    supabase.from("products").select(PRODUCT_SELECT).order("name", { ascending: true }),
+  // A per-request cache that exists only to be handed to the browser.
+  const queryClient = makeQueryClient();
+
+  await Promise.all([
+    queryClient.prefetchQuery(vendorOptionsQuery(supabase)),
+    queryClient.prefetchQuery(purchaseProductsQuery(supabase)),
   ]);
-
-  const vendors: Vendor[] = (vendorRows ?? []).map((row) => ({
-    id: row.id as string,
-    name: row.name as string,
-    phone: row.phone as string,
-    city: row.city as string,
-    address: row.address as string,
-    notes: row.notes as string,
-  }));
-
-  const products = (productRows ?? []).map(mapProduct);
 
   return (
     <div>
@@ -59,7 +54,9 @@ export default async function NewPurchaseOrderPage() {
           </ol>
 
           <div className="rounded-xl border border-border bg-surface p-5 shadow-sm sm:p-6">
-            <PurchaseOrderForm vendors={vendors} products={products} />
+            <HydrationBoundary state={dehydrate(queryClient)}>
+              <PurchaseOrderForm />
+            </HydrationBoundary>
           </div>
         </div>
       </div>

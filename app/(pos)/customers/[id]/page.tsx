@@ -1,19 +1,15 @@
 import Link from "next/link";
 import { cookies } from "next/headers";
 import { notFound } from "next/navigation";
+import { dehydrate, HydrationBoundary } from "@tanstack/react-query";
 import { TopBar } from "@/components/TopBar";
 import { StatCard } from "@/components/ui/StatCard";
 import { CustomerHistory } from "@/components/CustomerHistory";
 import { requirePermission } from "@/lib/auth";
 import { formatDate, formatPKR } from "@/lib/format";
-import {
-  CUSTOMER_SUMMARY_SELECT,
-  mapCustomerSummary,
-  mapSale,
-  paymentMethodLabel,
-  SALE_SELECT,
-  type SaleRow,
-} from "@/lib/sales";
+import { customerSalesQuery, customerSummaryQuery } from "@/lib/queries/customers";
+import { makeQueryClient } from "@/lib/queryClient";
+import { paymentMethodLabel } from "@/lib/sales";
 import { createClient } from "@/utils/supabase/server";
 
 export default async function CustomerDetailPage(props: PageProps<"/customers/[id]">) {
@@ -21,20 +17,19 @@ export default async function CustomerDetailPage(props: PageProps<"/customers/[i
   const { id } = await props.params;
 
   const supabase = createClient(await cookies());
+  // A per-request cache that exists only to be handed to the browser.
+  const queryClient = makeQueryClient();
 
-  const [{ data: summaryRow }, { data: saleRows }] = await Promise.all([
-    supabase.from("customer_summary").select(CUSTOMER_SUMMARY_SELECT).eq("id", id).maybeSingle(),
-    supabase
-      .from("sales")
-      .select(SALE_SELECT)
-      .eq("customer_id", id)
-      .order("sold_at", { ascending: false }),
-  ]);
+  // fetchQuery: the summary drives the stat cards and decides whether this
+  // customer exists at all, so it has to resolve before the page can render.
+  const customer = await queryClient.fetchQuery(customerSummaryQuery(supabase, { id }));
+  if (!customer) notFound();
 
-  if (!summaryRow) notFound();
-
-  const customer = mapCustomerSummary(summaryRow);
-  const sales: SaleRow[] = (saleRows ?? []).map(mapSale);
+  // The history count in the heading comes from the same query the client list
+  // reads, so it fills the cache dehydrated below rather than being passed down.
+  const sales = await queryClient.fetchQuery(
+    customerSalesQuery(supabase, { customerId: id })
+  );
 
   return (
     <div>
@@ -104,7 +99,9 @@ export default async function CustomerDetailPage(props: PageProps<"/customers/[i
             </span>
           </h2>
 
-          <CustomerHistory sales={sales} />
+          <HydrationBoundary state={dehydrate(queryClient)}>
+            <CustomerHistory customerId={id} />
+          </HydrationBoundary>
         </section>
       </div>
     </div>

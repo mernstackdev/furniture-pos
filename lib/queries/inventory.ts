@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { isEmptyRange } from "@/lib/queries/range";
 import type { InventoryFilterValues } from "@/components/InventoryFilters";
 import {
   INVENTORY_PAGE_SIZE,
@@ -61,7 +62,7 @@ export function inventoryProductsQuery(
         .order("name", { ascending: true })
         .range(from, from + INVENTORY_PAGE_SIZE - 1);
 
-      if (error) throw error;
+      if (error && !isEmptyRange(error)) throw error;
 
       return {
         products: (data ?? []).map(mapProduct),

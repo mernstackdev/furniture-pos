@@ -1,13 +1,13 @@
 "use client";
 
 import { zodResolver } from "@hookform/resolvers/zod";
-import { startTransition, useActionState } from "react";
 import { useForm, useWatch } from "react-hook-form";
 import { Button } from "./ui/Button";
 import { Field } from "./ui/Field";
 import { CategoryCombobox } from "./CategoryCombobox";
-import { useActionToast } from "./ui/Toast";
 import type { InventoryState } from "@/app/(pos)/inventory/actions";
+import { INVENTORY_QUERY_KEY } from "@/lib/queries/inventory";
+import { useServerAction, withoutPrevious } from "@/lib/queries/mutation";
 import { productSchema, type ProductValues } from "@/lib/validation";
 import type { Category, InventoryProduct } from "@/lib/inventory";
 
@@ -49,18 +49,14 @@ export function ProductForm({
     },
   });
 
-  // The dialog is dismissed from inside the wrapper rather than from an effect,
-  // which would cascade renders.
-  const [state, formAction, pending] = useActionState(
-    async (previous: InventoryState, formData: FormData) => {
-      const result = await action(previous, formData);
-      if (result.message) onDone();
-      return result;
-    },
-    initialState
-  );
-
-  useActionToast(state);
+  // Dismissed from the mutation's success handler rather than from an effect,
+  // which would cascade renders. This form owns the invalidation because it is
+  // what writes; its callers only have to close the dialog.
+  const mutation = useServerAction({
+    action: withoutPrevious(action, initialState),
+    invalidate: [INVENTORY_QUERY_KEY],
+    onSuccess: () => onDone(),
+  });
 
   // useWatch rather than watch(): RHF's watch cannot be memoized safely, which
   // React Compiler flags.
@@ -78,7 +74,7 @@ export function ProductForm({
     formData.set("stockQty", String(values.stockQty));
     formData.set("lowStockThreshold", String(values.lowStockThreshold));
     formData.set("reorderPoint", String(values.reorderPoint));
-    startTransition(() => formAction(formData));
+    mutation.mutate(formData);
   });
 
   return (
@@ -171,8 +167,8 @@ export function ProductForm({
         <Button type="button" variant="secondary" onClick={onCancel}>
           Cancel
         </Button>
-        <Button type="submit" disabled={pending}>
-          {pending ? "Saving…" : initial ? "Save changes" : "Add product"}
+        <Button type="submit" disabled={mutation.isPending}>
+          {mutation.isPending ? "Saving…" : initial ? "Save changes" : "Add product"}
         </Button>
       </div>
     </form>

@@ -1,13 +1,14 @@
 import { cookies } from "next/headers";
 import { notFound } from "next/navigation";
+import { dehydrate, HydrationBoundary } from "@tanstack/react-query";
 import { InvoicePrint } from "@/components/InvoicePrint";
 import { requirePermission } from "@/lib/auth";
 import {
-  mapSale,
-  mapSaleItem,
-  SALE_ITEM_SELECT,
-  SALE_SELECT,
-} from "@/lib/sales";
+  invoiceCustomerQuery,
+  invoiceItemsQuery,
+  invoiceQuery,
+} from "@/lib/queries/invoices";
+import { makeQueryClient } from "@/lib/queryClient";
 import { createClient } from "@/utils/supabase/server";
 
 export default async function InvoiceDetailPage(props: PageProps<"/invoices/[id]">) {
@@ -15,33 +16,27 @@ export default async function InvoiceDetailPage(props: PageProps<"/invoices/[id]
   const { id } = await props.params;
 
   const supabase = createClient(await cookies());
-  const { data: saleRow } = await supabase
-    .from("sales")
-    .select(SALE_SELECT)
-    .eq("id", id)
-    .maybeSingle();
+  // A per-request cache that exists only to be handed to the browser.
+  const queryClient = makeQueryClient();
 
-  if (!saleRow) notFound();
+  // fetchQuery: a missing invoice is a 404, which has to resolve before render.
+  const sale = await queryClient.fetchQuery(invoiceQuery(supabase, { id }));
+  if (!sale) notFound();
 
-  const sale = mapSale(saleRow);
-
-  const [{ data: itemRows }, { data: customerRow }] = await Promise.all([
-    supabase.from("sale_items").select(SALE_ITEM_SELECT).eq("sale_id", id),
+  // The billing contact is looked up by the sale's customer id, so it can only
+  // run once the sale is known; a walk-in has no customer to look up.
+  await Promise.all([
+    queryClient.fetchQuery(invoiceItemsQuery(supabase, { id })),
     sale.customerId
-      ? supabase
-          .from("customers")
-          .select("phone, address")
-          .eq("id", sale.customerId)
-          .maybeSingle()
-      : Promise.resolve({ data: null }),
+      ? queryClient.fetchQuery(
+          invoiceCustomerQuery(supabase, { customerId: sale.customerId })
+        )
+      : Promise.resolve(null),
   ]);
 
   return (
-    <InvoicePrint
-      sale={sale}
-      items={(itemRows ?? []).map(mapSaleItem)}
-      customerPhone={(customerRow?.phone as string) ?? null}
-      customerAddress={(customerRow?.address as string) ?? null}
-    />
+    <HydrationBoundary state={dehydrate(queryClient)}>
+      <InvoicePrint id={id} />
+    </HydrationBoundary>
   );
 }

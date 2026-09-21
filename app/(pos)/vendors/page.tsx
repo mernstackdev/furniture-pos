@@ -1,26 +1,21 @@
 import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
+import { dehydrate, HydrationBoundary } from "@tanstack/react-query";
 import { TopBar } from "@/components/TopBar";
 import { AddVendorButton } from "@/components/AddVendorButton";
 import { VendorsManager } from "@/components/VendorsManager";
+import type { VendorFilterValues } from "@/components/VendorFilters";
 import { hasPermission, requirePermission } from "@/lib/auth";
+import { recentPurchaseOrdersQuery } from "@/lib/queries/purchases";
 import {
-  mapPurchaseOrder,
-  mapVendorPayment,
-  PURCHASE_SELECT,
-  VENDOR_PAYMENT_SELECT,
-  type PurchaseOrderRow,
-  type Vendor,
-  type VendorBalance,
-} from "@/lib/inventory";
+  VENDORS_PAGE_SIZE,
+  vendorPaymentsQuery,
+  vendorsQuery,
+} from "@/lib/queries/vendors";
+import { makeQueryClient } from "@/lib/queryClient";
 import { createClient } from "@/utils/supabase/server";
 
-const PAGE_SIZE = 10;
 const BALANCES = ["all", "owing", "settled"];
-
-/** PostgREST `or` filters use commas and parentheses as delimiters. */
-function sanitize(term: string): string {
-  return term.replace(/[,()"\\*]/g, " ").trim();
-}
 
 export default async function VendorsPage(props: PageProps<"/vendors">) {
   const user = await requirePermission("inventory.view");
@@ -36,80 +31,24 @@ export default async function VendorsPage(props: PageProps<"/vendors">) {
   const balance = BALANCES.includes(rawBalance) ? rawBalance : "all";
   const page = Math.max(1, Number(read("page")) || 1);
 
+  const filters: VendorFilterValues = { q, balance };
+
   const supabase = createClient(await cookies());
+  // A per-request cache that exists only to be handed to the browser.
+  const queryClient = makeQueryClient();
 
-  // Balances live in a view, so searching and paging happen against it; the
-  // vendor contact fields are then fetched for just this page.
-  let query = supabase
-    .from("vendor_balances")
-    .select("vendor_id, vendor_name, phone, city, purchased_total, paid_total, outstanding", {
-      count: "exact",
-    });
-
-  const term = sanitize(q);
-  if (term) {
-    query = query.or(
-      `vendor_name.ilike.%${term}%,phone.ilike.%${term}%,city.ilike.%${term}%`
-    );
-  }
-  if (balance === "owing") query = query.gt("outstanding", 0);
-  if (balance === "settled") query = query.eq("outstanding", 0);
-
-  const from = (page - 1) * PAGE_SIZE;
-
-  const { data: balanceRows, count } = await query
-    .order("vendor_name", { ascending: true })
-    .range(from, from + PAGE_SIZE - 1);
-
-  const ids = (balanceRows ?? []).map((row) => row.vendor_id as string);
-
-  const [{ data: vendorRows }, { data: paymentRows }, { data: orderRows }] = await Promise.all([
-    ids.length
-      ? supabase.from("vendors").select("id, name, phone, city, address, notes").in("id", ids)
-      : Promise.resolve({ data: [] as Record<string, unknown>[] }),
-    supabase
-      .from("vendor_payments")
-      .select(VENDOR_PAYMENT_SELECT)
-      .order("paid_at", { ascending: false })
-      .limit(200),
-    supabase
-      .from("purchase_orders")
-      .select(PURCHASE_SELECT)
-      .order("created_at", { ascending: false })
-      .limit(200),
+  // fetchQuery rather than prefetchQuery: the offset count decides whether this
+  // page number exists at all, and that redirect has to resolve before anything
+  // streams. The other reads fill the cache dehydrated below.
+  const { total } = await queryClient.fetchQuery(vendorsQuery(supabase, { filters, page }));
+  await Promise.all([
+    queryClient.prefetchQuery(vendorPaymentsQuery(supabase)),
+    queryClient.prefetchQuery(recentPurchaseOrdersQuery(supabase)),
   ]);
 
-  const vendorById = new Map((vendorRows ?? []).map((row) => [row.id as string, row]));
+  const totalPages = Math.max(1, Math.ceil(total / VENDORS_PAGE_SIZE));
 
-  const vendors: Vendor[] = (balanceRows ?? []).map((row) => {
-    const id = row.vendor_id as string;
-    const full = vendorById.get(id);
-    return {
-      id,
-      name: (full?.name as string) ?? (row.vendor_name as string),
-      phone: (full?.phone as string) ?? (row.phone as string),
-      city: (full?.city as string) ?? (row.city as string),
-      address: (full?.address as string) ?? "",
-      notes: (full?.notes as string) ?? "",
-    };
-  });
-
-  const balances: Record<string, VendorBalance> = {};
-  for (const row of balanceRows ?? []) {
-    balances[row.vendor_id as string] = {
-      vendorId: row.vendor_id as string,
-      purchasedTotal: Number(row.purchased_total),
-      paidTotal: Number(row.paid_total),
-      outstanding: Number(row.outstanding),
-    };
-  }
-
-  const payments = (paymentRows ?? []).map(mapVendorPayment);
-  const orders: PurchaseOrderRow[] = (orderRows ?? []).map(mapPurchaseOrder);
-
-  const total = count ?? 0;
-  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
-
+  // Plain links, so paging works without client JS and keeps the filters.
   const hrefFor = (targetPage: number) => {
     const next = new URLSearchParams();
     if (q) next.set("q", q);
@@ -119,6 +58,12 @@ export default async function VendorsPage(props: PageProps<"/vendors">) {
     return queryString ? `/vendors?${queryString}` : "/vendors";
   };
 
+  // A page past the end (a stale bookmark, or a filter that shrank the result
+  // set) would otherwise render an empty table under a "Page 3 of 1" footer.
+  if (page > totalPages) {
+    redirect(hrefFor(totalPages));
+  }
+
   return (
     <div>
       <TopBar
@@ -127,19 +72,16 @@ export default async function VendorsPage(props: PageProps<"/vendors">) {
         action={hasPermission(user, "inventory.manage") ? <AddVendorButton /> : undefined}
       />
       <div className="p-4 sm:p-8">
-        <VendorsManager
-          vendors={vendors}
-          balances={balances}
-          payments={payments}
-          orders={orders}
-          canManage={hasPermission(user, "inventory.manage")}
-          filters={{ q, balance }}
-          page={page}
-          pageSize={PAGE_SIZE}
-          total={total}
-          prevHref={page > 1 ? hrefFor(page - 1) : null}
-          nextHref={page < totalPages ? hrefFor(page + 1) : null}
-        />
+        <HydrationBoundary state={dehydrate(queryClient)}>
+          <VendorsManager
+            canManage={hasPermission(user, "inventory.manage")}
+            filters={filters}
+            page={page}
+            pageSize={VENDORS_PAGE_SIZE}
+            prevHref={page > 1 ? hrefFor(page - 1) : null}
+            nextHref={page < totalPages ? hrefFor(page + 1) : null}
+          />
+        </HydrationBoundary>
       </div>
     </div>
   );

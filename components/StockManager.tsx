@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Modal } from "@/components/ui/Modal";
@@ -13,27 +14,37 @@ import {
   ResponsiveList,
 } from "@/components/ui/ResponsiveList";
 import { StockAdjustForm } from "@/components/StockAdjustForm";
+import { useSupabaseBrowser } from "@/lib/queries/client";
+import { stockMovementsQuery, stockProductsQuery } from "@/lib/queries/stock";
 import { formatDateTime } from "@/lib/format";
 import {
   movementTone,
   stockStatusLabel,
   stockStatusTone,
   type InventoryProduct,
-  type StockMovementRow,
 } from "@/lib/inventory";
 
-export function StockManager({
-  products,
-  movements,
-  restock,
-  canManage,
-}: {
-  products: InventoryProduct[];
-  movements: StockMovementRow[];
-  restock: InventoryProduct[];
-  canManage: boolean;
-}) {
+export function StockManager({ canManage }: { canManage: boolean }) {
+  const supabase = useSupabaseBrowser();
   const [adjusting, setAdjusting] = useState<InventoryProduct | null>(null);
+
+  // Both keys were prefetched on the server and hydrated, so the first render
+  // reads the cache.
+  const { data: productData, isPending: productsPending } = useQuery(
+    stockProductsQuery(supabase)
+  );
+  const { data: movementData, isPending: movementsPending } = useQuery(
+    stockMovementsQuery(supabase)
+  );
+
+  const products = productData ?? [];
+  const movements = movementData ?? [];
+
+  // At or below the reorder point, and not already at zero — out-of-stock items
+  // are called out separately by the status badge.
+  const restock = products.filter(
+    (product) => product.stockQty > 0 && product.stockQty <= product.reorderPoint
+  );
 
   return (
     <div className="space-y-8">
@@ -81,7 +92,7 @@ export function StockManager({
         <ResponsiveList
           rows={products}
           rowKey={(product) => product.id}
-          emptyMessage="No products yet."
+          emptyMessage={productsPending ? "Loading stock levels…" : "No products yet."}
           card={(product) => (
             <>
               <CardHeading
@@ -157,7 +168,9 @@ export function StockManager({
         <ResponsiveList
           rows={movements}
           rowKey={(movement) => movement.id}
-          emptyMessage="No stock movements recorded yet."
+          emptyMessage={
+            movementsPending ? "Loading movements…" : "No stock movements recorded yet."
+          }
           card={(movement) => (
             <>
               <CardHeading

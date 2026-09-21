@@ -1,6 +1,7 @@
 "use client";
 
-import { useActionState, useState } from "react";
+import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -13,68 +14,66 @@ import {
   PaginationFooter,
   ResponsiveList,
 } from "@/components/ui/ResponsiveList";
-import { useActionToast } from "@/components/ui/Toast";
 import { VendorForm } from "@/components/VendorForm";
 import { VendorPaymentForm } from "@/components/VendorPaymentForm";
 import { VendorFilters, type VendorFilterValues } from "@/components/VendorFilters";
 import { deletePayment, deleteVendor, type VendorState } from "@/app/(pos)/vendors/actions";
 import { formatDate, formatPKR } from "@/lib/format";
+import { vendorPaymentMethodLabel, type Vendor } from "@/lib/inventory";
+import { useSupabaseBrowser } from "@/lib/queries/client";
+import { withoutPrevious, useServerAction } from "@/lib/queries/mutation";
+import { recentPurchaseOrdersQuery } from "@/lib/queries/purchases";
 import {
-  vendorPaymentMethodLabel,
-  type PurchaseOrderRow,
-  type Vendor,
-  type VendorBalance,
-  type VendorPaymentRow,
-} from "@/lib/inventory";
+  VENDORS_QUERY_KEY,
+  vendorPaymentsQuery,
+  vendorsQuery,
+} from "@/lib/queries/vendors";
 
 const initialState: VendorState = { error: null, message: null };
 
 export function VendorsManager({
-  vendors,
-  balances,
-  payments,
-  orders,
   canManage,
   filters,
   page,
   pageSize,
-  total,
   prevHref,
   nextHref,
 }: {
-  vendors: Vendor[];
-  balances: Record<string, VendorBalance>;
-  payments: VendorPaymentRow[];
-  orders: PurchaseOrderRow[];
   canManage: boolean;
   filters: VendorFilterValues;
   page: number;
   pageSize: number;
-  total: number;
   prevHref: string | null;
   nextHref: string | null;
 }) {
+  const supabase = useSupabaseBrowser();
   const [editing, setEditing] = useState<Vendor | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Vendor | null>(null);
   const [payTarget, setPayTarget] = useState<Vendor | null>(null);
   const [historyTarget, setHistoryTarget] = useState<Vendor | null>(null);
   const [filtersOpen, setFiltersOpen] = useState(false);
 
-  const [deleteState, deleteAction, deletePending] = useActionState(
-    async (previous: VendorState, formData: FormData) => {
-      const result = await deleteVendor(previous, formData);
-      if (result.message) setDeleteTarget(null);
-      return result;
-    },
-    initialState
-  );
-  useActionToast(deleteState);
+  // The server render dehydrated these exact query keys, so the first paint
+  // reads from the cache rather than triggering a browser fetch.
+  const { data, isPending } = useQuery(vendorsQuery(supabase, { filters, page }));
+  const vendors = data?.vendors ?? [];
+  const balances = data?.balances ?? {};
+  const total = data?.total ?? 0;
+  const { data: paymentData } = useQuery(vendorPaymentsQuery(supabase));
+  const payments = paymentData ?? [];
+  const { data: orderData } = useQuery(recentPurchaseOrdersQuery(supabase));
+  const orders = orderData ?? [];
 
-  const [paymentState, paymentAction] = useActionState(
-    async (previous: VendorState, formData: FormData) => deletePayment(previous, formData),
-    initialState
-  );
-  useActionToast(paymentState);
+  const deleteMutation = useServerAction({
+    action: withoutPrevious(deleteVendor, initialState),
+    invalidate: [VENDORS_QUERY_KEY],
+    onSuccess: () => setDeleteTarget(null),
+  });
+
+  const paymentMutation = useServerAction({
+    action: withoutPrevious(deletePayment, initialState),
+    invalidate: [VENDORS_QUERY_KEY],
+  });
 
   const balanceFor = (vendorId: string): number => balances[vendorId]?.outstanding ?? 0;
 
@@ -85,8 +84,9 @@ export function VendorsManager({
     Boolean
   ).length;
 
-  const emptyMessage =
-    activeFilterCount > 0
+  const emptyMessage = isPending
+    ? "Loading vendors…"
+    : activeFilterCount > 0
       ? "No vendors match these filters."
       : "No vendors yet. Add the manufacturers and wholesalers you buy from.";
 
@@ -95,13 +95,13 @@ export function VendorsManager({
     const formData = new FormData();
     formData.set("id", deleteTarget.id);
     formData.set("label", deleteTarget.name);
-    deleteAction(formData);
+    deleteMutation.mutate(formData);
   }
 
   function removePayment(paymentId: string) {
     const formData = new FormData();
     formData.set("id", paymentId);
-    paymentAction(formData);
+    paymentMutation.mutate(formData);
   }
 
   const historyPayments = historyTarget
@@ -250,7 +250,7 @@ export function VendorsManager({
           <ConfirmDialog
             open={deleteTarget !== null}
             title="Delete vendor"
-            pending={deletePending}
+            pending={deleteMutation.isPending}
             message={
               <>
                 Delete <span className="font-medium text-foreground">{deleteTarget?.name}</span>?

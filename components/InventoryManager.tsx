@@ -1,7 +1,7 @@
 "use client";
 
-import { useActionState, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -9,11 +9,11 @@ import { Modal } from "@/components/ui/Modal";
 import { ResponsiveList, PaginationFooter, CardHeading, CardFields, CardField, CardActions } from "@/components/ui/ResponsiveList";
 import { InventoryFilters, type InventoryFilterValues } from "@/components/InventoryFilters";
 import { ProductForm } from "@/components/ProductForm";
-import { useActionToast } from "@/components/ui/Toast";
 import { deleteProduct, updateProduct, type InventoryState } from "@/app/(pos)/inventory/actions";
 import { formatPKR } from "@/lib/format";
 import { INVENTORY_QUERY_KEY, inventoryProductsQuery } from "@/lib/queries/inventory";
 import { useSupabaseBrowser } from "@/lib/queries/client";
+import { useServerAction, withoutPrevious } from "@/lib/queries/mutation";
 import {
   stockStatusLabel,
   stockStatusTone,
@@ -41,7 +41,6 @@ export function InventoryManager({
   nextHref: string | null;
 }) {
   const supabase = useSupabaseBrowser();
-  const queryClient = useQueryClient();
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<InventoryProduct | null>(null);
   const [pendingDelete, setPendingDelete] = useState<InventoryProduct | null>(null);
@@ -55,20 +54,14 @@ export function InventoryManager({
   const products = data?.products ?? [];
   const total = data?.total ?? 0;
 
-  const [deleteState, deleteAction, deletePending] = useActionState(
-    async (previous: InventoryState, formData: FormData) => {
-      const result = await deleteProduct(previous, formData);
-      if (result.message) {
-        setPendingDelete(null);
-        // revalidatePath refreshed the server render, but this cache is the
-        // browser's — without this the deleted row lingers until it goes stale.
-        queryClient.invalidateQueries({ queryKey: INVENTORY_QUERY_KEY });
-      }
-      return result;
-    },
-    initialState
-  );
-  useActionToast(deleteState);
+  // The delete lives here rather than in a form component, so the invalidation
+  // belongs here too: revalidatePath refreshes the server render, but this cache
+  // is the browser's, and without it the deleted row lingers until it goes stale.
+  const deleteMutation = useServerAction({
+    action: withoutPrevious(deleteProduct, initialState),
+    invalidate: [INVENTORY_QUERY_KEY],
+    onSuccess: () => setPendingDelete(null),
+  });
 
   const firstRow = total === 0 ? 0 : (page - 1) * pageSize + 1;
   const lastRow = Math.min(page * pageSize, total);
@@ -95,7 +88,7 @@ export function InventoryManager({
     const formData = new FormData();
     formData.set("id", pendingDelete.id);
     formData.set("label", pendingDelete.name);
-    deleteAction(formData);
+    deleteMutation.mutate(formData);
   }
 
   function openEditor(product: InventoryProduct) {
@@ -227,10 +220,7 @@ export function InventoryManager({
               categories={categories}
               initial={editing ?? undefined}
               action={updateProduct}
-              onDone={() => {
-                queryClient.invalidateQueries({ queryKey: INVENTORY_QUERY_KEY });
-                setModalOpen(false);
-              }}
+              onDone={() => setModalOpen(false)}
               onCancel={() => setModalOpen(false)}
             />
           </Modal>
@@ -238,7 +228,7 @@ export function InventoryManager({
           <ConfirmDialog
             open={pendingDelete !== null}
             title="Delete product"
-            pending={deletePending}
+            pending={deleteMutation.isPending}
             message={
               <>
                 Delete{" "}

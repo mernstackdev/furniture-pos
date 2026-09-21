@@ -1,33 +1,37 @@
 import { cookies } from "next/headers";
+import { dehydrate, HydrationBoundary } from "@tanstack/react-query";
 import { SalesClient } from "@/components/SalesClient";
 import { hasPermission, requirePermission } from "@/lib/auth";
-import { mapProduct, PRODUCT_SELECT, type Category } from "@/lib/inventory";
-import { CUSTOMER_SELECT, mapCustomer } from "@/lib/sales";
+import {
+  salesCategoriesQuery,
+  salesCustomersQuery,
+  salesProductsQuery,
+} from "@/lib/queries/sales";
+import { makeQueryClient } from "@/lib/queryClient";
 import { createClient } from "@/utils/supabase/server";
 
 export default async function SalesPage() {
   const user = await requirePermission("sales.view");
 
   const supabase = createClient(await cookies());
-  const [{ data: productRows }, { data: customerRows }, { data: categoryRows }] =
-    await Promise.all([
-      supabase.from("products").select(PRODUCT_SELECT).order("name", { ascending: true }),
-      supabase.from("customers").select(CUSTOMER_SELECT).order("name", { ascending: true }),
-      supabase.from("categories").select("id, name").order("name", { ascending: true }),
-    ]);
+  // A per-request cache that exists only to be handed to the browser.
+  const queryClient = makeQueryClient();
 
-  const categories: Category[] = (categoryRows ?? []).map((row) => ({
-    id: row.id as string,
-    name: row.name as string,
-  }));
+  // Nothing in this render reads these values, so prefetch (not fetch) is
+  // enough: the till hydrates from the dehydrated cache without a browser
+  // round trip of its own.
+  await Promise.all([
+    queryClient.prefetchQuery(salesProductsQuery(supabase)),
+    queryClient.prefetchQuery(salesCustomersQuery(supabase)),
+    queryClient.prefetchQuery(salesCategoriesQuery(supabase)),
+  ]);
 
   return (
-    <SalesClient
-      products={(productRows ?? []).map(mapProduct)}
-      customers={(customerRows ?? []).map(mapCustomer)}
-      categories={categories}
-      canSell={hasPermission(user, "sales.manage")}
-      canAddCustomer={hasPermission(user, "customers.manage")}
-    />
+    <HydrationBoundary state={dehydrate(queryClient)}>
+      <SalesClient
+        canSell={hasPermission(user, "sales.manage")}
+        canAddCustomer={hasPermission(user, "customers.manage")}
+      />
+    </HydrationBoundary>
   );
 }

@@ -1,17 +1,12 @@
 import { cookies } from "next/headers";
+import { dehydrate, HydrationBoundary } from "@tanstack/react-query";
 import { TopBar } from "@/components/TopBar";
 import { AddCustomerButton } from "@/components/AddCustomerButton";
 import { CustomersManager } from "@/components/CustomersManager";
 import { hasPermission, requirePermission } from "@/lib/auth";
-import { CUSTOMER_SUMMARY_SELECT, mapCustomerSummary } from "@/lib/sales";
+import { CUSTOMERS_PAGE_SIZE, customersQuery } from "@/lib/queries/customers";
+import { makeQueryClient } from "@/lib/queryClient";
 import { createClient } from "@/utils/supabase/server";
-
-const PAGE_SIZE = 10;
-
-/** PostgREST `or` filters use commas and parentheses as delimiters. */
-function sanitize(term: string): string {
-  return term.replace(/[,()"\\*]/g, " ").trim();
-}
 
 export default async function CustomersPage(props: PageProps<"/customers">) {
   const user = await requirePermission("sales.view");
@@ -21,24 +16,23 @@ export default async function CustomersPage(props: PageProps<"/customers">) {
   const q = ((Array.isArray(raw) ? raw[0] : raw) ?? "").trim();
   const page = Math.max(1, Number((Array.isArray(params.page) ? params.page[0] : params.page) ?? "") || 1);
 
+  const filters = { q };
+
   const supabase = createClient(await cookies());
+  // A per-request cache that exists only to be handed to the browser.
+  const queryClient = makeQueryClient();
 
-  // The summary view carries the totals, so the list and the detail page share
-  // one definition of "total spent" and "last payment method".
-  let query = supabase.from("customer_summary").select(CUSTOMER_SUMMARY_SELECT, { count: "exact" });
+  // fetchQuery rather than prefetchQuery: the page number's hrefs depend on the
+  // total, which has to resolve before the footer can render. The same call
+  // fills the cache dehydrated below, so the browser list renders without a
+  // query of its own.
+  const { total } = await queryClient.fetchQuery(
+    customersQuery(supabase, { filters, page })
+  );
 
-  const term = sanitize(q);
-  if (term) query = query.or(`name.ilike.%${term}%,phone.ilike.%${term}%`);
+  const totalPages = Math.max(1, Math.ceil(total / CUSTOMERS_PAGE_SIZE));
 
-  const from = (page - 1) * PAGE_SIZE;
-  const { data, count } = await query
-    .order("name", { ascending: true })
-    .range(from, from + PAGE_SIZE - 1);
-
-  const customers = (data ?? []).map(mapCustomerSummary);
-  const total = count ?? 0;
-  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
-
+  // Plain links, so paging works without client JS and keeps the search.
   const hrefFor = (targetPage: number) => {
     const next = new URLSearchParams();
     if (q) next.set("q", q);
@@ -55,15 +49,15 @@ export default async function CustomersPage(props: PageProps<"/customers">) {
         action={hasPermission(user, "customers.manage") ? <AddCustomerButton /> : undefined}
       />
       <div className="p-4 sm:p-8">
-        <CustomersManager
-          customers={customers}
-          canManage={hasPermission(user, "customers.manage")}
-          filters={{ q }}
-          page={page}
-          total={total}
-          prevHref={page > 1 ? hrefFor(page - 1) : null}
-          nextHref={page < totalPages ? hrefFor(page + 1) : null}
-        />
+        <HydrationBoundary state={dehydrate(queryClient)}>
+          <CustomersManager
+            canManage={hasPermission(user, "customers.manage")}
+            filters={filters}
+            page={page}
+            prevHref={page > 1 ? hrefFor(page - 1) : null}
+            nextHref={page < totalPages ? hrefFor(page + 1) : null}
+          />
+        </HydrationBoundary>
       </div>
     </div>
   );

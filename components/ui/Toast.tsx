@@ -82,21 +82,3 @@ export function useToast() {
   if (!ctx) throw new Error("useToast must be used within ToastProvider");
   return ctx;
 }
-
-/**
- * Surfaces a Server Action's returned state as a toast. Actions return a fresh
- * state object on every submission, so identity comparison is enough to avoid
- * re-toasting the same result on unrelated re-renders.
- */
-export function useActionToast(state: { error?: string | null; message?: string | null }) {
-  const toast = useToast();
-  const seen = useRef<unknown>(undefined);
-
-  useEffect(() => {
-    if (seen.current === state) return;
-    seen.current = state;
-
-    if (state.error) toast.error(state.error);
-    else if (state.message) toast.success(state.message);
-  }, [state, toast]);
-}

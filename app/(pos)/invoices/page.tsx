@@ -1,19 +1,19 @@
 import Link from "next/link";
 import { cookies } from "next/headers";
+import { dehydrate, HydrationBoundary } from "@tanstack/react-query";
 import { TopBar } from "@/components/TopBar";
 import { InvoicesManager } from "@/components/InvoicesManager";
 import { PaginationFooter } from "@/components/ui/ResponsiveList";
 import { hasPermission, requirePermission } from "@/lib/auth";
-import { mapSale, SALE_SELECT, type SaleRow } from "@/lib/sales";
+import {
+  INVOICES_PAGE_SIZE,
+  invoicesQuery,
+  type InvoiceFilterValues,
+} from "@/lib/queries/invoices";
+import { makeQueryClient } from "@/lib/queryClient";
 import { createClient } from "@/utils/supabase/server";
 
-const PAGE_SIZE = 10;
 const STATUSES = ["paid", "unpaid"];
-
-/** PostgREST `or` filters use commas and parentheses as delimiters. */
-function sanitize(term: string): string {
-  return term.replace(/[,()"\\*]/g, " ").trim();
-}
 
 export default async function InvoicesPage(props: PageProps<"/invoices">) {
   const user = await requirePermission("sales.view");
@@ -29,24 +29,20 @@ export default async function InvoicesPage(props: PageProps<"/invoices">) {
   const status = STATUSES.includes(rawStatus) ? rawStatus : "all";
   const page = Math.max(1, Number(read("page")) || 1);
 
+  const filters: InvoiceFilterValues = { q, status };
+
   const supabase = createClient(await cookies());
+  // A per-request cache that exists only to be handed to the browser.
+  const queryClient = makeQueryClient();
 
-  // Searching a customer by name would need an inner join in the filter; the
-  // customer page covers per-customer history instead.
-  let query = supabase.from("sales").select(SALE_SELECT, { count: "exact" });
-  const term = sanitize(q);
-  if (term) query = query.or(`invoice_no.ilike.%${term}%`);
-  if (status !== "all") query = query.eq("status", status);
+  // The footer needs the total, so it is fetched rather than prefetched; the
+  // same call still fills the cache dehydrated below.
+  const { total } = await queryClient.fetchQuery(invoicesQuery(supabase, { filters, page }));
 
-  const from = (page - 1) * PAGE_SIZE;
-  const { data, count } = await query
-    .order("sold_at", { ascending: false })
-    .range(from, from + PAGE_SIZE - 1);
+  const totalPages = Math.max(1, Math.ceil(total / INVOICES_PAGE_SIZE));
+  const from = (page - 1) * INVOICES_PAGE_SIZE;
 
-  const sales: SaleRow[] = (data ?? []).map(mapSale);
-  const total = count ?? 0;
-  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
-
+  // Plain links, so paging works without client JS and keeps the filters.
   const hrefFor = (targetPage: number) => {
     const next = new URLSearchParams();
     if (q) next.set("q", q);
@@ -106,10 +102,16 @@ export default async function InvoicesPage(props: PageProps<"/invoices">) {
           </div>
         </div>
 
-        <InvoicesManager sales={sales} canManage={hasPermission(user, "sales.manage")} />
+        <HydrationBoundary state={dehydrate(queryClient)}>
+          <InvoicesManager
+            canManage={hasPermission(user, "sales.manage")}
+            filters={filters}
+            page={page}
+          />
+        </HydrationBoundary>
 
         <PaginationFooter
-          summary={total === 0 ? "No invoices" : `Showing ${from + 1}–${Math.min(from + PAGE_SIZE, total)} of ${total}`}
+          summary={total === 0 ? "No invoices" : `Showing ${from + 1}–${Math.min(from + INVOICES_PAGE_SIZE, total)} of ${total}`}
           page={page}
           totalPages={totalPages}
           prevHref={page > 1 ? hrefFor(page - 1) : null}

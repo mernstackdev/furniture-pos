@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useActionState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import {
@@ -11,42 +11,54 @@ import {
   CardHeading,
   ResponsiveList,
 } from "@/components/ui/ResponsiveList";
-import { useToast } from "@/components/ui/Toast";
 import { markSalePaid } from "@/app/(pos)/invoices/actions";
 import { formatDate, formatPKR } from "@/lib/format";
+import { useSupabaseBrowser } from "@/lib/queries/client";
+import { CUSTOMERS_QUERY_KEY } from "@/lib/queries/customers";
+import {
+  INVOICES_QUERY_KEY,
+  invoicesQuery,
+  type InvoiceFilterValues,
+} from "@/lib/queries/invoices";
+import { useServerAction } from "@/lib/queries/mutation";
 import { paymentMethodLabel, saleStatusTone, type SaleRow } from "@/lib/sales";
 
 export function InvoicesManager({
-  sales,
   canManage,
+  filters,
+  page,
 }: {
-  sales: SaleRow[];
   canManage: boolean;
+  filters: InvoiceFilterValues;
+  page: number;
 }) {
-  const toast = useToast();
+  const supabase = useSupabaseBrowser();
 
-  const [, markPaid, marking] = useActionState(
-    async (_previous: { error: string | null }, formData: FormData) => {
-      const result = await markSalePaid(formData);
-      if (result.error) toast.error(result.error);
-      else toast.success(result.message ?? "Invoice updated.");
-      return result;
-    },
-    { error: null }
-  );
+  // The server render dehydrated this exact query key, so the first paint reads
+  // from the cache rather than triggering a browser fetch.
+  const { data, isPending } = useQuery(invoicesQuery(supabase, { filters, page }));
+  const sales = data?.sales ?? [];
+
+  // markSalePaid is already single-argument, so it needs no withoutPrevious.
+  // Settling an invoice leaves stock alone, but it clears the customer's
+  // outstanding balance, which the customers screen shows.
+  const markPaid = useServerAction({
+    action: markSalePaid,
+    invalidate: [INVOICES_QUERY_KEY, CUSTOMERS_QUERY_KEY],
+  });
 
   function actions(sale: SaleRow) {
     if (!canManage || sale.status === "paid") return null;
     return (
       <CardActions>
         <form
-          action={markPaid}
+          action={markPaid.mutate}
           onSubmit={(event) => {
             event.stopPropagation();
           }}
         >
           <input type="hidden" name="id" value={sale.id} />
-          <Button variant="secondary" disabled={marking} type="submit">
+          <Button variant="secondary" disabled={markPaid.isPending} type="submit">
             Mark paid
           </Button>
         </form>
@@ -58,7 +70,7 @@ export function InvoicesManager({
     <ResponsiveList
       rowKey={(sale) => sale.id}
       rows={sales}
-      emptyMessage="No invoices found."
+      emptyMessage={isPending ? "Loading invoices…" : "No invoices found."}
       card={(sale) => (
         <>
           <CardHeading
@@ -113,9 +125,9 @@ export function InvoicesManager({
                   sale.status === "paid" ? (
                     <span className="text-xs text-muted-foreground">—</span>
                   ) : (
-                    <form action={markPaid}>
+                    <form action={markPaid.mutate}>
                       <input type="hidden" name="id" value={sale.id} />
-                      <Button variant="secondary" disabled={marking} type="submit">
+                      <Button variant="secondary" disabled={markPaid.isPending} type="submit">
                         Mark paid
                       </Button>
                     </form>

@@ -1,12 +1,13 @@
 "use client";
 
 import { zodResolver } from "@hookform/resolvers/zod";
-import { startTransition, useActionState } from "react";
 import { useForm } from "react-hook-form";
 import { Button } from "./ui/Button";
 import { Field } from "./ui/Field";
-import { useActionToast } from "./ui/Toast";
 import { saveVendor, type VendorState } from "@/app/(pos)/vendors/actions";
+import { withoutPrevious, useServerAction } from "@/lib/queries/mutation";
+import { PURCHASES_QUERY_KEY } from "@/lib/queries/purchases";
+import { VENDORS_QUERY_KEY } from "@/lib/queries/vendors";
 import { vendorSchema, type VendorValues } from "@/lib/validation";
 import type { Vendor } from "@/lib/inventory";
 
@@ -36,16 +37,12 @@ export function VendorForm({
     },
   });
 
-  const [state, formAction, pending] = useActionState(
-    async (previous: VendorState, formData: FormData) => {
-      const result = await saveVendor(previous, formData);
-      if (result.message) onDone();
-      return result;
-    },
-    initialState
-  );
-
-  useActionToast(state);
+  const mutation = useServerAction({
+    action: withoutPrevious(saveVendor, initialState),
+    // A rename also changes the vendor name embedded in every purchase row.
+    invalidate: [VENDORS_QUERY_KEY, PURCHASES_QUERY_KEY],
+    onSuccess: () => onDone(),
+  });
 
   const onSubmit = handleSubmit((values) => {
     const formData = new FormData();
@@ -55,7 +52,7 @@ export function VendorForm({
     formData.set("city", values.city ?? "");
     formData.set("address", values.address ?? "");
     formData.set("notes", values.notes ?? "");
-    startTransition(() => formAction(formData));
+    mutation.mutate(formData);
   });
 
   return (
@@ -98,8 +95,8 @@ export function VendorForm({
         <Button type="button" variant="secondary" onClick={onCancel}>
           Cancel
         </Button>
-        <Button type="submit" disabled={pending}>
-          {pending ? "Saving…" : initial ? "Save changes" : "Add vendor"}
+        <Button type="submit" disabled={mutation.isPending}>
+          {mutation.isPending ? "Saving…" : initial ? "Save changes" : "Add vendor"}
         </Button>
       </div>
     </form>

@@ -1,13 +1,13 @@
 "use client";
 
 import { zodResolver } from "@hookform/resolvers/zod";
-import { startTransition, useActionState } from "react";
 import { useForm } from "react-hook-form";
 import { Button } from "./ui/Button";
 import { Field } from "./ui/Field";
-import { useActionToast } from "./ui/Toast";
 import { recordPayment, type VendorState } from "@/app/(pos)/vendors/actions";
 import { formatPKR } from "@/lib/format";
+import { withoutPrevious, useServerAction } from "@/lib/queries/mutation";
+import { VENDORS_QUERY_KEY } from "@/lib/queries/vendors";
 import { vendorPaymentSchema, type VendorPaymentValues } from "@/lib/validation";
 import type { PurchaseOrderRow, Vendor } from "@/lib/inventory";
 
@@ -43,16 +43,12 @@ export function VendorPaymentForm({
     },
   });
 
-  const [state, formAction, pending] = useActionState(
-    async (previous: VendorState, formData: FormData) => {
-      const result = await recordPayment(previous, formData);
-      if (result.message) onDone();
-      return result;
-    },
-    initialState
-  );
-
-  useActionToast(state);
+  const mutation = useServerAction({
+    action: withoutPrevious(recordPayment, initialState),
+    // A payment moves the vendor's balance and its payment history.
+    invalidate: [VENDORS_QUERY_KEY],
+    onSuccess: () => onDone(),
+  });
 
   const onSubmit = handleSubmit((values) => {
     const formData = new FormData();
@@ -62,7 +58,7 @@ export function VendorPaymentForm({
     formData.set("method", values.method);
     formData.set("reference", values.reference ?? "");
     formData.set("note", values.note ?? "");
-    startTransition(() => formAction(formData));
+    mutation.mutate(formData);
   });
 
   return (
@@ -118,8 +114,8 @@ export function VendorPaymentForm({
         <Button type="button" variant="secondary" onClick={onCancel}>
           Cancel
         </Button>
-        <Button type="submit" disabled={pending}>
-          {pending ? "Saving…" : "Record payment"}
+        <Button type="submit" disabled={mutation.isPending}>
+          {mutation.isPending ? "Saving…" : "Record payment"}
         </Button>
       </div>
     </form>

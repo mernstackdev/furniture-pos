@@ -1,11 +1,12 @@
 "use client";
 
 import { zodResolver } from "@hookform/resolvers/zod";
-import { startTransition, useActionState } from "react";
 import { useForm } from "react-hook-form";
 import { Button } from "./ui/Button";
 import { Field } from "./ui/Field";
-import { useActionToast } from "./ui/Toast";
+import { CUSTOMERS_QUERY_KEY } from "@/lib/queries/customers";
+import { INVOICES_QUERY_KEY } from "@/lib/queries/invoices";
+import { useServerAction, withoutPrevious } from "@/lib/queries/mutation";
 import type { CustomerState } from "@/app/(pos)/customers/actions";
 import { customerSchema, type CustomerValues } from "@/lib/validation";
 import type { Customer } from "@/lib/sales";
@@ -33,16 +34,15 @@ export function CustomerForm({ initial, action, onDone, onCancel }: CustomerForm
     },
   });
 
-  const [state, formAction, pending] = useActionState(
-    async (previous: CustomerState, formData: FormData) => {
-      const result = await action(previous, formData);
-      if (result.message) onDone();
-      return result;
-    },
-    initialState
-  );
-
-  useActionToast(state);
+  const mutation = useServerAction({
+    action: withoutPrevious(action, initialState),
+    // Renaming a customer changes the name embedded in every past invoice, so
+    // an edit has to refresh that list as well as this one.
+    invalidate: initial
+      ? [CUSTOMERS_QUERY_KEY, INVOICES_QUERY_KEY]
+      : [CUSTOMERS_QUERY_KEY],
+    onSuccess: () => onDone(),
+  });
 
   const onSubmit = handleSubmit((values) => {
     const formData = new FormData();
@@ -50,7 +50,7 @@ export function CustomerForm({ initial, action, onDone, onCancel }: CustomerForm
     formData.set("name", values.name);
     formData.set("phone", values.phone);
     formData.set("address", values.address);
-    startTransition(() => formAction(formData));
+    mutation.mutate(formData);
   });
 
   return (
@@ -76,8 +76,8 @@ export function CustomerForm({ initial, action, onDone, onCancel }: CustomerForm
         <Button type="button" variant="secondary" onClick={onCancel}>
           Cancel
         </Button>
-        <Button type="submit" disabled={pending}>
-          {pending ? "Saving…" : initial ? "Save changes" : "Add customer"}
+        <Button type="submit" disabled={mutation.isPending}>
+          {mutation.isPending ? "Saving…" : initial ? "Save changes" : "Add customer"}
         </Button>
       </div>
     </form>

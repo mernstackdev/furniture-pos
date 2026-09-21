@@ -1,19 +1,16 @@
 import Link from "next/link";
 import { cookies } from "next/headers";
+import { dehydrate, HydrationBoundary } from "@tanstack/react-query";
 import { TopBar } from "@/components/TopBar";
 import { PurchasesManager } from "@/components/PurchasesManager";
-import type { VendorOption } from "@/components/PurchaseFilters";
+import type { PurchaseFilterValues } from "@/components/PurchaseFilters";
 import { hasPermission, requirePermission } from "@/lib/auth";
-import { mapPurchaseOrder, PURCHASE_SELECT, type PurchaseOrderRow } from "@/lib/inventory";
+import { PURCHASES_PAGE_SIZE, purchaseOrdersQuery } from "@/lib/queries/purchases";
+import { vendorOptionsQuery } from "@/lib/queries/vendors";
+import { makeQueryClient } from "@/lib/queryClient";
 import { createClient } from "@/utils/supabase/server";
 
-const PAGE_SIZE = 10;
 const STATUSES = ["draft", "ordered", "received", "cancelled"];
-
-/** PostgREST `or` filters use commas and parentheses as delimiters. */
-function sanitize(term: string): string {
-  return term.replace(/[,()"\\*]/g, " ").trim();
-}
 
 export default async function PurchasesPage(props: PageProps<"/purchases">) {
   const user = await requirePermission("inventory.view");
@@ -31,32 +28,20 @@ export default async function PurchasesPage(props: PageProps<"/purchases">) {
   const page = Math.max(1, Number(read("page")) || 1);
   const canManage = hasPermission(user, "inventory.manage");
 
+  const filters: PurchaseFilterValues = { q, status, vendor };
+
   const supabase = createClient(await cookies());
+  // A per-request cache that exists only to be handed to the browser.
+  const queryClient = makeQueryClient();
 
-  let query = supabase.from("purchase_orders").select(PURCHASE_SELECT, { count: "exact" });
+  // fetchQuery because the count decides the next link, which has to resolve
+  // before anything streams. The vendor picker fills the cache dehydrated below.
+  const { total } = await queryClient.fetchQuery(
+    purchaseOrdersQuery(supabase, { filters, page })
+  );
+  await queryClient.prefetchQuery(vendorOptionsQuery(supabase));
 
-  const term = sanitize(q);
-  // Searching a vendor by name would need an inner join in the filter; the
-  // vendor dropdown covers that instead.
-  if (term) query = query.or(`reference.ilike.%${term}%,notes.ilike.%${term}%`);
-  if (status !== "all") query = query.eq("status", status);
-  if (vendor !== "all") query = query.eq("vendor_id", vendor);
-
-  const from = (page - 1) * PAGE_SIZE;
-
-  const [{ data: orderRows, count }, { data: vendorRows }] = await Promise.all([
-    query.order("created_at", { ascending: false }).range(from, from + PAGE_SIZE - 1),
-    supabase.from("vendors").select("id, name").order("name"),
-  ]);
-
-  const orders: PurchaseOrderRow[] = (orderRows ?? []).map(mapPurchaseOrder);
-  const vendors: VendorOption[] = (vendorRows ?? []).map((row) => ({
-    id: row.id as string,
-    name: row.name as string,
-  }));
-
-  const total = count ?? 0;
-  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const totalPages = Math.max(1, Math.ceil(total / PURCHASES_PAGE_SIZE));
 
   const hrefFor = (targetPage: number) => {
     const next = new URLSearchParams();
@@ -85,17 +70,16 @@ export default async function PurchasesPage(props: PageProps<"/purchases">) {
         }
       />
       <div className="p-4 sm:p-8">
-        <PurchasesManager
-          orders={orders}
-          vendors={vendors}
-          canManage={canManage}
-          filters={{ q, status, vendor }}
-          page={page}
-          pageSize={PAGE_SIZE}
-          total={total}
-          prevHref={page > 1 ? hrefFor(page - 1) : null}
-          nextHref={page < totalPages ? hrefFor(page + 1) : null}
-        />
+        <HydrationBoundary state={dehydrate(queryClient)}>
+          <PurchasesManager
+            canManage={canManage}
+            filters={filters}
+            page={page}
+            pageSize={PURCHASES_PAGE_SIZE}
+            prevHref={page > 1 ? hrefFor(page - 1) : null}
+            nextHref={page < totalPages ? hrefFor(page + 1) : null}
+          />
+        </HydrationBoundary>
       </div>
     </div>
   );

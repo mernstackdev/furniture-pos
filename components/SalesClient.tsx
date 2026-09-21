@@ -2,6 +2,7 @@
 
 import { useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { TopBar } from "@/components/TopBar";
 import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
@@ -11,38 +12,57 @@ import { useToast } from "@/components/ui/Toast";
 import { useShopSettings } from "@/lib/settings";
 import { formatPKR } from "@/lib/format";
 import { recordSale } from "@/app/(pos)/sales/actions";
-import { discountSchema } from "@/lib/validation";
-import type { InventoryProduct, Category } from "@/lib/inventory";
+import { INVENTORY_QUERY_KEY } from "@/lib/queries/inventory";
+import { INVOICES_QUERY_KEY } from "@/lib/queries/invoices";
+import {
+  SALES_CUSTOMERS_KEY,
+  SALES_QUERY_KEY,
+  salesCategoriesQuery,
+  salesCustomersQuery,
+  salesProductsQuery,
+} from "@/lib/queries/sales";
+import { useSupabaseBrowser } from "@/lib/queries/client";
+import { discountSchema, type SaleValues } from "@/lib/validation";
 import type { Customer, PaymentMethod } from "@/lib/sales";
 
 interface CartLine {
   productId: string;
   name: string;
   qty: number;
+  /** Snapshot from the catalogue when the line was added, never re-read. */
   unitPrice: number;
 }
 
 /**
- * The till. Prices and stock come from the server; the cart only carries
- * product ids and quantities, and the RPC prices the sale from the catalogue.
+ * The till. Products and customers come from the react-query cache (hydrated
+ * from the server render); the cart only carries product ids and quantities,
+ * and the RPC prices the sale from the catalogue.
  */
 export function SalesClient({
-  products,
-  customers,
-  categories,
   canSell,
   canAddCustomer,
 }: {
-  products: InventoryProduct[];
-  customers: Customer[];
-  categories: Category[];
   canSell: boolean;
   canAddCustomer: boolean;
 }) {
   const router = useRouter();
   const toast = useToast();
+  const supabase = useSupabaseBrowser();
+  const queryClient = useQueryClient();
   const { settings } = useShopSettings();
   const discountType = settings.discountType;
+
+  // The server render dehydrated these exact keys, so the first paint reads
+  // from the cache rather than triggering a browser fetch.
+  const { data: productData, isPending: productsPending } = useQuery(
+    salesProductsQuery(supabase)
+  );
+  const { data: customerData } = useQuery(salesCustomersQuery(supabase));
+  const { data: categoryData } = useQuery(salesCategoriesQuery(supabase));
+
+  const products = useMemo(() => productData ?? [], [productData]);
+  const customers = customerData ?? [];
+  const categories = categoryData ?? [];
 
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState<string>("All");
@@ -50,15 +70,41 @@ export function SalesClient({
   const [customerId, setCustomerId] = useState<string>("");
   const [discount, setDiscount] = useState("0");
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("cash");
-  const [submitting, setSubmitting] = useState(false);
 
-  // Customers added during this visit, so the new record can be selected
-  // immediately without waiting for the page to re-render.
-  const [addedCustomers, setAddedCustomers] = useState<Customer[]>([]);
   const [pendingCustomerName, setPendingCustomerName] = useState<string | null>(null);
   const createResolver = useRef<((result: { value: string; label: string } | { error: string }) => void) | null>(null);
 
-  const allCustomers = [...customers, ...addedCustomers];
+  /**
+   * `recordSale` reports success with `{ id }`, not the app-wide
+   * `{ error, message }`, so `useServerAction` (which keys success off an absent
+   * `error` and a present `message`) cannot wrap it. A plain mutation keeps the
+   * same contract and wires the invalidation and toast the helper would have.
+   */
+  const recordSaleMutation = useMutation({
+    mutationFn: (input: SaleValues) => recordSale(input),
+    onSuccess: (result) => {
+      if ("error" in result) {
+        toast.error(result.error);
+        return;
+      }
+
+      // A recorded sale adds an invoice and moves stock, so refresh every
+      // domain it touched — the browser cache, not just the server render.
+      queryClient.invalidateQueries({ queryKey: SALES_QUERY_KEY });
+      queryClient.invalidateQueries({ queryKey: INVOICES_QUERY_KEY });
+      queryClient.invalidateQueries({ queryKey: INVENTORY_QUERY_KEY });
+
+      setCart([]);
+      setDiscount("0");
+      setCustomerId("");
+      router.push(`/invoices/${result.id}`);
+    },
+    onError: (error) => {
+      toast.error(
+        error instanceof Error ? error.message : "Something went wrong. Please try again."
+      );
+    },
+  });
 
   /**
    * The Combobox's create row waits on this promise, so it stays in its
@@ -79,7 +125,11 @@ export function SalesClient({
   }
 
   function handleCustomerCreated(customer: Customer) {
-    setAddedCustomers((prev) => [...prev, customer]);
+    // Refetch the customers list rather than appending to a local array: the
+    // list now lives in the query cache, and a local merge would vanish on the
+    // next visit. The invalidation puts the new customer into the query data,
+    // which is where the Combobox reads its options from.
+    queryClient.invalidateQueries({ queryKey: SALES_CUSTOMERS_KEY });
     setCustomerId(customer.id);
     setPendingCustomerName(null);
     createResolver.current?.({ value: customer.id, label: customer.name });
@@ -131,6 +181,8 @@ export function SalesClient({
           productId,
           name: product.name,
           qty: 1,
+          // Snapshot at add time: a background refetch of the product list must
+          // not reprice a line the cashier has already shown the customer.
           unitPrice: product.sellPrice,
         },
       ];
@@ -150,29 +202,16 @@ export function SalesClient({
     setCart((prev) => prev.filter((line) => line.productId !== productId));
   }
 
-  async function completeSale() {
-    if (cart.length === 0 || discountError || submitting) return;
-    setSubmitting(true);
+  function completeSale() {
+    if (cart.length === 0 || discountError || recordSaleMutation.isPending) return;
 
-    const result = await recordSale({
+    recordSaleMutation.mutate({
       customerId: customerId || null,
       items: cart.map((line) => ({ productId: line.productId, qty: line.qty })),
       discount: discountValue,
       paymentMethod,
       status: "paid",
     });
-
-    setSubmitting(false);
-
-    if ("error" in result) {
-      toast.error(result.error);
-      return;
-    }
-
-    setCart([]);
-    setDiscount("0");
-    setCustomerId("");
-    router.push(`/invoices/${result.id}`);
   }
 
   return (
@@ -245,7 +284,7 @@ export function SalesClient({
             })}
             {filteredProducts.length === 0 ? (
               <p className="col-span-full py-10 text-center text-sm text-muted-foreground">
-                No products match your search.
+                {productsPending ? "Loading products…" : "No products match your search."}
               </p>
             ) : null}
           </div>
@@ -300,7 +339,7 @@ export function SalesClient({
             <div className="block text-sm">
               <span className="mb-1 block font-medium text-foreground">Customer</span>
               <Combobox
-                options={allCustomers.map((customer) => ({
+                options={customers.map((customer) => ({
                   value: customer.id,
                   label: customer.name,
                   hint: customer.phone,
@@ -365,11 +404,14 @@ export function SalesClient({
           <Button
             className="mt-4 w-full"
             disabled={
-              cart.length === 0 || discountError !== null || submitting || !canSell
+              cart.length === 0 ||
+              discountError !== null ||
+              recordSaleMutation.isPending ||
+              !canSell
             }
             onClick={completeSale}
           >
-            {submitting ? "Recording…" : "Complete sale"}
+            {recordSaleMutation.isPending ? "Recording…" : "Complete sale"}
           </Button>
 
           {!canSell ? (
