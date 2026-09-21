@@ -24,28 +24,35 @@ export async function getSessionUser(): Promise<SessionUser | null> {
   const claims = data?.claims as { sub?: string } | undefined;
   if (!claims?.sub) return null;
 
-  const { data: profile } = await supabase
-    .from("profiles")
-    .select("id, email, full_name, role")
-    .eq("id", claims.sub)
-    .single();
+  // One round trip, not two. The role -> permission map is a handful of rows,
+  // so fetch all of it alongside the profile and filter locally. Looking it up
+  // by the profile's role serialised a second round trip behind the first, and
+  // that latency is paid on every page the user opens.
+  const [profileResult, grantsResult] = await Promise.all([
+    supabase
+      .from("profiles")
+      .select("id, email, full_name, role")
+      .eq("id", claims.sub)
+      .single(),
+    supabase.from("role_permissions").select("role, permission_key"),
+  ]);
 
+  const profile = profileResult.data;
   if (!profile) return null;
 
   // Read from the table rather than the JWT: the role claim is baked into the
-  // token, but permissions are looked up per request, so changing what a role
-  // may do takes effect immediately without waiting for a token refresh.
-  const { data: grants } = await supabase
-    .from("role_permissions")
-    .select("permission_key")
-    .eq("role", profile.role as string);
+  // token, but permissions are read per request, so changing what a role may do
+  // takes effect immediately without waiting for a token refresh.
+  const permissions = (grantsResult.data ?? [])
+    .filter((row) => row.role === profile.role)
+    .map((row) => row.permission_key as string);
 
   return {
     id: profile.id as string,
     email: profile.email as string,
     fullName: profile.full_name as string,
     role: profile.role as AppRole,
-    permissions: (grants ?? []).map((row) => row.permission_key as string),
+    permissions,
   };
 }
 

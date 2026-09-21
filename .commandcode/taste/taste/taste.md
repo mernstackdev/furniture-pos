@@ -27,3 +27,4 @@
 - Dedicated sub-pages (e.g. a full-page form reachable from a list) should carry a clear control back to the parent list — a "← Back" button in the top bar. Confidence: 0.6
 - Cares about the visual polish of screens and will call out a page that looks unprofessional ("not looking good"), expecting a proper redesign rather than a functional-but-plain layout. Confidence: 0.6
 - Wants per-record detail/history views, not just lists: e.g. a customer detail page showing purchase history, totals and the last payment method used, with rows linking through to the underlying records. Confidence: 0.6
+- Prefers a repo-local git identity over the global git config for his projects: commits should be authored/committed with the per-project `user.name`/`user.email`, and he'll rewrite already-pushed commits (force-with-lease) to fix them when they went out under the global identity. Confidence: 0.55
