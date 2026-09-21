@@ -1,6 +1,7 @@
--- Staff profiles. `role` is the single source of truth for authorization; it is
--- injected into the JWT by the custom access token hook (03_auth_hook.sql) so
--- RLS policies can read it without a recursive lookup.
+-- Staff profiles. `role` is the single source of truth for authorization, and
+-- it is read live through private.current_role() below. The custom access token
+-- hook (03_auth_hook.sql) still stamps it onto the token as `user_role`, but
+-- nothing authorizes from that claim any more.
 
 create type public.app_role as enum ('admin', 'cashier');
 
@@ -21,6 +22,36 @@ create index profiles_created_at_idx on public.profiles (created_at desc);
 -- (not by this schema), so a trigger is the only way to guarantee a profile
 -- exists for every user.
 create schema if not exists private;
+
+-- The caller's role, read live from public.profiles.
+--
+-- Authorization used to read the JWT's `user_role` claim instead. That claim is
+-- frozen when a token is issued, so the database and the app (which reads this
+-- row) disagreed for as long as the token lived: an account promoted to admin
+-- mid-session passed the app's guard and was then rejected here with
+-- "not authorized", while a demoted admin kept their access. Reading the row
+-- makes a role change effective immediately in both directions.
+--
+-- SECURITY DEFINER because the policies below are ON public.profiles: an
+-- invoker function would re-enter them and Postgres would raise "infinite
+-- recursion detected in policy for relation profiles". The read is pinned to
+-- auth.uid() and returns a single enum, so it exposes nothing the caller could
+-- not already read, and a missing row yields NULL, which every caller treats as
+-- "not an admin".
+create function private.current_role()
+returns public.app_role
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select role from public.profiles where id = (select auth.uid());
+$$;
+
+comment on function private.current_role() is 'The caller''s role, read live from public.profiles.';
+
+revoke execute on function private.current_role() from public, anon;
+grant execute on function private.current_role() to authenticated;
 
 create function private.handle_new_auth_user()
 returns trigger
@@ -67,7 +98,7 @@ begin
     return new;
   end if;
 
-  if (select auth.jwt() ->> 'user_role') = 'admin' then
+  if (select private.current_role()) = 'admin' then
     new.updated_at := now();
     return new;
   end if;
@@ -120,18 +151,18 @@ create policy "Signed-in users can view own profile, admins any"
 on public.profiles for select to authenticated
 using (
   (select auth.uid()) = id
-  or ((select auth.jwt()) ->> 'user_role') = 'admin'
+  or (select private.current_role()) = 'admin'
 );
 
 create policy "Signed-in users can update own profile, admins any"
 on public.profiles for update to authenticated
 using (
   (select auth.uid()) = id
-  or ((select auth.jwt()) ->> 'user_role') = 'admin'
+  or (select private.current_role()) = 'admin'
 )
 with check (
   (select auth.uid()) = id
-  or ((select auth.jwt()) ->> 'user_role') = 'admin'
+  or (select private.current_role()) = 'admin'
 );
 
 -- The access token hook runs as supabase_auth_admin, which needs to read the

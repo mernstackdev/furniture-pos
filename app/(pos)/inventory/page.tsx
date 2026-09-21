@@ -1,28 +1,20 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
+import { dehydrate, HydrationBoundary } from "@tanstack/react-query";
 import { TopBar } from "@/components/TopBar";
 import { AddProductButton } from "@/components/AddProductButton";
 import { InventoryManager } from "@/components/InventoryManager";
 import type { InventoryFilterValues } from "@/components/InventoryFilters";
 import { hasPermission, requirePermission } from "@/lib/auth";
+import { INVENTORY_PAGE_SIZE } from "@/lib/inventory";
 import {
-  INVENTORY_PAGE_SIZE,
-  mapProduct,
-  PRODUCT_SELECT,
-  type Category,
-} from "@/lib/inventory";
+  inventoryCategoriesQuery,
+  inventoryProductsQuery,
+} from "@/lib/queries/inventory";
+import { makeQueryClient } from "@/lib/queryClient";
 import { createClient } from "@/utils/supabase/server";
 
 const STATUSES = ["out", "low", "ok"];
-
-/**
- * Search terms go into a PostgREST `or` filter, whose syntax uses commas and
- * parentheses as delimiters. Those characters (and the `*` wildcard alias and
- * `\`) are stripped so a term cannot break out of the filter expression.
- */
-function sanitizeSearch(term: string): string {
-  return term.replace(/[,()"\\*]/g, " ").trim();
-}
 
 export default async function InventoryPage(props: PageProps<"/inventory">) {
   const user = await requirePermission("inventory.view");
@@ -51,31 +43,19 @@ export default async function InventoryPage(props: PageProps<"/inventory">) {
   };
 
   const supabase = createClient(await cookies());
+  // A per-request cache that exists only to be handed to the browser.
+  const queryClient = makeQueryClient();
 
-  let query = supabase.from("products").select(PRODUCT_SELECT, { count: "exact" });
-
-  const term = sanitizeSearch(q);
-  if (term) query = query.or(`name.ilike.%${term}%,sku.ilike.%${term}%`);
-  if (category !== "all") query = query.eq("category_id", category);
-  if (status !== "all") query = query.eq("stock_status", status);
-  if (minPrice) query = query.gte("sell_price", Number(minPrice));
-  if (maxPrice) query = query.lte("sell_price", Number(maxPrice));
-
-  const from = (page - 1) * INVENTORY_PAGE_SIZE;
-
-  const [{ data, count }, { data: categoryRows }] = await Promise.all([
-    query.order("name", { ascending: true }).range(from, from + INVENTORY_PAGE_SIZE - 1),
-    supabase.from("categories").select("id, name").order("name", { ascending: true }),
+  // fetchQuery rather than prefetchQuery: the offset count decides whether this
+  // page number exists at all, and that redirect has to resolve before anything
+  // streams. Both calls still fill the cache dehydrated below, so the browser
+  // renders this data without issuing a query of its own.
+  const [{ total }, categories] = await Promise.all([
+    queryClient.fetchQuery(inventoryProductsQuery(supabase, { filters, page })),
+    queryClient.fetchQuery(inventoryCategoriesQuery(supabase)),
   ]);
 
-  const products = (data ?? []).map(mapProduct);
-  const total = count ?? 0;
   const totalPages = Math.max(1, Math.ceil(total / INVENTORY_PAGE_SIZE));
-
-  const categories: Category[] = (categoryRows ?? []).map((row) => ({
-    id: row.id as string,
-    name: row.name as string,
-  }));
 
   // Plain links, so paging works without client JS and keeps the filters.
   const hrefFor = (targetPage: number) => {
@@ -109,17 +89,17 @@ export default async function InventoryPage(props: PageProps<"/inventory">) {
         }
       />
       <div className="p-4 sm:p-8">
-        <InventoryManager
-          products={products}
-          categories={categories}
-          canManage={hasPermission(user, "inventory.manage")}
-          filters={filters}
-          page={page}
-          pageSize={INVENTORY_PAGE_SIZE}
-          total={total}
-          prevHref={page > 1 ? hrefFor(page - 1) : null}
-          nextHref={page < totalPages ? hrefFor(page + 1) : null}
-        />
+        <HydrationBoundary state={dehydrate(queryClient)}>
+          <InventoryManager
+            categories={categories}
+            canManage={hasPermission(user, "inventory.manage")}
+            filters={filters}
+            page={page}
+            pageSize={INVENTORY_PAGE_SIZE}
+            prevHref={page > 1 ? hrefFor(page - 1) : null}
+            nextHref={page < totalPages ? hrefFor(page + 1) : null}
+          />
+        </HydrationBoundary>
       </div>
     </div>
   );

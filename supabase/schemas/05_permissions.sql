@@ -32,7 +32,7 @@ as $$
     select 1
     from public.role_permissions rp
     where rp.permission_key = p_permission
-      and rp.role = (select auth.jwt() ->> 'user_role')::public.app_role
+      and rp.role = (select private.current_role())
   );
 $$;
 

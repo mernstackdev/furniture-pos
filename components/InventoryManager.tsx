@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -11,6 +12,8 @@ import { ProductForm } from "@/components/ProductForm";
 import { useActionToast } from "@/components/ui/Toast";
 import { deleteProduct, updateProduct, type InventoryState } from "@/app/(pos)/inventory/actions";
 import { formatPKR } from "@/lib/format";
+import { INVENTORY_QUERY_KEY, inventoryProductsQuery } from "@/lib/queries/inventory";
+import { useSupabaseBrowser } from "@/lib/queries/client";
 import {
   stockStatusLabel,
   stockStatusTone,
@@ -21,34 +24,46 @@ import {
 const initialState: InventoryState = { error: null, message: null };
 
 export function InventoryManager({
-  products,
   categories,
   canManage,
   filters,
   page,
   pageSize,
-  total,
   prevHref,
   nextHref,
 }: {
-  products: InventoryProduct[];
   categories: Category[];
   canManage: boolean;
   filters: InventoryFilterValues;
   page: number;
   pageSize: number;
-  total: number;
   prevHref: string | null;
   nextHref: string | null;
 }) {
+  const supabase = useSupabaseBrowser();
+  const queryClient = useQueryClient();
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<InventoryProduct | null>(null);
   const [pendingDelete, setPendingDelete] = useState<InventoryProduct | null>(null);
 
+  // The server render dehydrated this exact query key, so the first paint reads
+  // from the cache rather than triggering a browser fetch. A revisit within the
+  // stale window reuses it too.
+  const { data, isPending } = useQuery(
+    inventoryProductsQuery(supabase, { filters, page })
+  );
+  const products = data?.products ?? [];
+  const total = data?.total ?? 0;
+
   const [deleteState, deleteAction, deletePending] = useActionState(
     async (previous: InventoryState, formData: FormData) => {
       const result = await deleteProduct(previous, formData);
-      if (result.message) setPendingDelete(null);
+      if (result.message) {
+        setPendingDelete(null);
+        // revalidatePath refreshed the server render, but this cache is the
+        // browser's — without this the deleted row lingers until it goes stale.
+        queryClient.invalidateQueries({ queryKey: INVENTORY_QUERY_KEY });
+      }
       return result;
     },
     initialState
@@ -69,8 +84,9 @@ export function InventoryManager({
 
   const [filtersOpen, setFiltersOpen] = useState(activeFilterCount > 0);
 
-  const emptyMessage =
-    activeFilterCount > 0
+  const emptyMessage = isPending
+    ? "Loading products…"
+    : activeFilterCount > 0
       ? "No products match these filters."
       : "No products found. Add your first product to get started.";
 
@@ -211,7 +227,10 @@ export function InventoryManager({
               categories={categories}
               initial={editing ?? undefined}
               action={updateProduct}
-              onDone={() => setModalOpen(false)}
+              onDone={() => {
+                queryClient.invalidateQueries({ queryKey: INVENTORY_QUERY_KEY });
+                setModalOpen(false);
+              }}
               onCancel={() => setModalOpen(false)}
             />
           </Modal>

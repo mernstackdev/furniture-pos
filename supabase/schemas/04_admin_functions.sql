@@ -19,7 +19,7 @@ security definer
 set search_path = ''
 as $$
 begin
-  if (select auth.jwt() ->> 'user_role') is distinct from 'admin' then
+  if (select private.current_role()) is distinct from 'admin' then
     raise exception 'not authorized' using errcode = '42501';
   end if;
 end;
